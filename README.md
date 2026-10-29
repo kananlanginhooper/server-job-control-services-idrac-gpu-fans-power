@@ -28,7 +28,7 @@ The dashboard UI and its API live in a separate repo, `server-job-control-dashbo
 | [`whisper-server`](services/whisper-server/) | GPU server | Stateless Whisper transcription workers (`POST /transcribe`). CPU by default, CUDA optional. Honors Low Power |
 | [`vision-server`](services/vision-server/) | GPU desktop | SigLIP image tags and phrase search, plus ArcFace face embeddings, on the GPU (`/embed`, `/search`, `/health`) |
 | [`ssd-write-cache`](services/ssd-write-cache/) | hub | Boot: turns on the drive write cache for the listed data SSDs, matched by serial |
-| [`taskrunner`](services/taskrunner/) | every server | The one job service per server. Runs task rows from a local Postgres `tasks` table, sizes them to the power target, status on :8098, CLI `taskctl` |
+| [`taskrunner`](services/taskrunner/) | every server | The one job service per server. Keeps the task rows in a local Postgres `tasks` table running (instance counts set by hand; `gpu` tasks wait in Low Power), status on :8098, CLI `taskctl` |
 | [`tools/task-report.py`](services/tools/) | anywhere | CLI: post one task to the dashboard's Tasks table |
 | [`sjc-agent`](services/sjc-agent/) | every server (Docker) | Publishes the server's BMC sensors, DCMI power, GPU, fan-control and run-level state and system metrics to MQTT. Runs `fans` / `gpu_limit` commands, refused while fan-control owns them, with a manual-hold lease and a hand-back to Dell auto at Emergency temperature. Built on [`lib/sjc_hw`](lib/sjc_hw/) |
 

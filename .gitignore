@@ -3,3 +3,6 @@ private/
 snapshot-*/
 __pycache__/
 .pytest_cache/
+services/power-guard/power-guard.json
+services/power-guard/state.json
+services/power-guard/guard.log

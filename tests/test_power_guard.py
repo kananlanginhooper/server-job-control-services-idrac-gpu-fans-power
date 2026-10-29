@@ -97,3 +97,19 @@ def test_dry_run_posts_nothing(guard):
     st = {"cap": {}, "posted": {}, "pkg_hist": [90]}
     pg.tighten(CFG, st, pg.readings(), "combined", "test", dry=True)
     assert throttles(dash) == {} and st["cap"]
+
+
+def test_config_with_host_named_keys_still_loads(guard):
+    pg, _ = guard
+    old = {k: v for k, v in CFG.items() if k not in ("hub_floor_w", "hub_max_w", "srv_floor_pkg_w", "srv_max_pkg_w")}
+    old.update({"alpha_floor_w": 280, "alpha_max_w": 550, "beta_floor_pkg_w": 55, "beta_max_pkg_w": 95})
+    c = pg.cfg_keys(old)
+    assert (c["hub_floor_w"], c["hub_max_w"], c["srv_floor_pkg_w"], c["srv_max_pkg_w"]) == (280, 550, 55, 95)
+
+
+def test_power_guard_dir_setting(tmp_path, monkeypatch):
+    monkeypatch.setenv("POWER_GUARD_DIR", str(tmp_path))
+    spec = importlib.util.spec_from_file_location("pg2", os.path.join(ROOT, "services", "power-guard", "power-guard.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m.LOG == os.path.join(str(tmp_path), "guard.log") and m.CFG == os.path.join(str(tmp_path), "power-guard.json")

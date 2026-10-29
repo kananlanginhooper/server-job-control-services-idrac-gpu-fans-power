@@ -1,0 +1,6 @@
+# iDRAC is the vendor product name (BMC), not a host
+net:server-name * (?i)idrac
+# this repo publishes the power-guard service itself
+net:service-name * power-guard
+# the LLM job watcher that power-hooks/copilot.sh wakes
+net:service-name services/power-hooks/copilot.sh gpu-watcher

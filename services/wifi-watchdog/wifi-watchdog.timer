@@ -1,0 +1,10 @@
+[Unit]
+Description=Wi-Fi watchdog: every minute after 5 min of uptime
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

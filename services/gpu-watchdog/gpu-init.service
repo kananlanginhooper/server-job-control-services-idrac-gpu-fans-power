@@ -1,0 +1,12 @@
+[Unit]
+Description=Load the NVIDIA driver and set the GPU power cap (driver is blacklisted at boot for safety)
+After=systemd-modules-load.service
+Before=ollama.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash @REPO@/services/gpu-watchdog/gpu-init.sh
+
+[Install]
+WantedBy=multi-user.target

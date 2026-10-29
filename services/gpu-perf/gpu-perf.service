@@ -1,0 +1,13 @@
+[Unit]
+Description=Per-minute GPU performance table (gpu_perf) from the GPU server's agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=@USER@
+ExecStart=/usr/bin/python3 @REPO@/services/gpu-perf/gpu-perf.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

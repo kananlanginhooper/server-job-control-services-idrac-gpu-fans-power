@@ -1,0 +1,9 @@
+[Unit]
+Description=GPU watchdog: 90 s after boot, then every 5 min
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

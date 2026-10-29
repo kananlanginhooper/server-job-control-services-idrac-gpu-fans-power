@@ -1,0 +1,17 @@
+[Unit]
+Description=Task runner: this server's job work from the local Postgres task table (same template on every server, 2026-10-28)
+# Local Postgres only: the runner never waits for another machine at boot (tasks wait for their own needs instead)
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+User=svc
+ExecStart=/usr/bin/python3 -B /opt/taskrunner/taskrunner.py
+Restart=always
+RestartSec=10
+# the runner stops its tasks itself on SIGTERM (TERM, then KILL after 30 s); systemd cleans up whatever is left
+KillMode=mixed
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

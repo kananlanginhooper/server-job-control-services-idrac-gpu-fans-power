@@ -1,0 +1,11 @@
+[Unit]
+Description=Enable the drive write cache on the listed data SSDs (by serial)
+After=local-fs.target systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash @REPO@/services/ssd-write-cache/ssd-write-cache.sh
+
+[Install]
+WantedBy=multi-user.target

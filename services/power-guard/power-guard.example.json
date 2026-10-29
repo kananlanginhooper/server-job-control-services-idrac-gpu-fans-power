@@ -1,0 +1,22 @@
+{
+ "_doc": "power-guard (Power and Jobs Sizing). Tightens CPU power caps through Dashboard's /api/throttle (lower-only, self-expiring). A combined over steps BOTH servers at once, ~step_w from each, set below each server's actual draw (GPU server pkg cap = actual pkg W - step_w/2; hub DCMI = peak - step_w). An GPU server-only over steps only the GPU server. Also steps the GPU server GPU power limit (gpu_step_w, floor gpu_floor_w, below the profile limit) and steps every cap back UP when peaks stay up_margin_w under the line for up_hold_s (2026-10-01). Never touches jobs. Live-editable.",
+ "interval_s": 10,
+ "peak_margin_w": 50,
+ "cooldown_s": 20,
+ "cooldown_avg_s": 60,
+ "stale_s": 30,
+ "hub_floor_w": 280,
+ "hold_s": 900,
+ "hold_repost_s": 300,
+ "step_w": 40,
+ "srv_floor_pkg_w": 55,
+ "gpu_step_w": 8,
+ "gpu_floor_w": 120,
+ "gpu_max_w": 210,
+ "up_margin_w": 60,
+ "up_hold_s": 180,
+ "hub_max_w": 550,
+ "srv_max_pkg_w": 95,
+ "up_step_frac": 0.5,
+ "gpu_after_cpu_frac": 0.5
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=RAM bandwidth from the Intel uncore IMC counters, written to /dev/shm/imc-bw.json every 5 s
+
+[Service]
+ExecStart=/usr/bin/python3 @REPO@/services/imc-bw/imc-bw.py /dev/shm/imc-bw.json
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

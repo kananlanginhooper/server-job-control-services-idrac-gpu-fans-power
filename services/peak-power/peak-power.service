@@ -1,0 +1,11 @@
+[Unit]
+Description=True power peaks from the BMC's own peak counter (ipmitool delloem powermonitor), read and reset every 30 s
+
+[Service]
+# IPMITOOL_CMD in the repo .env: the ipmitool command line for this host (e.g. with an env LD_LIBRARY_PATH=... prefix)
+ExecStart=/bin/bash -c '. @REPO@/lib/svcenv.sh; exec /usr/bin/python3 @REPO@/services/peak-power/peak-power.py /dev/shm/peak-power.json $(svc_env IPMITOOL_CMD ipmitool)'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

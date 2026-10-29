@@ -1,0 +1,13 @@
+[Unit]
+Description=Power guard: holds the combined power line by stepping server and GPU caps through the dashboard's /api/throttle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=@USER@
+ExecStart=/usr/bin/python3 @REPO@/services/power-guard/power-guard.py run
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

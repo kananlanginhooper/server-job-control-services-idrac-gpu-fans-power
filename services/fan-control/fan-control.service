@@ -1,0 +1,12 @@
+[Unit]
+Description=Fan controller: fixed thermal modes via IPMI, DCMI cap on the hub, GPU card fan + power limit on the GPU server
+# never ordered on the network or other servers: the fans must come up even when everything else is down
+After=basic.target
+
+[Service]
+ExecStart=/usr/bin/python3 @REPO@/services/fan-control/fan-control.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

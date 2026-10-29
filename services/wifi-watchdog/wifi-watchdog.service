@@ -1,0 +1,7 @@
+[Unit]
+Description=Wi-Fi watchdog: reload the Wi-Fi driver, then reboot (capped), if the gateway stays unreachable
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash @REPO@/services/wifi-watchdog/wifi-watchdog.sh

@@ -3,6 +3,8 @@
 # Fixed modes, no fan curves (2026-09-24): Quick Cool > Emergency > Run Mode > Normal, each a fixed speed.
 # Server fans via Dell IPMI; on the GPU server also the RTX 2080 Ti card fan and power limit via NVML.
 # Falls back to Dell automatic fans, the card's automatic fan and the fixed power limit on any failure or on exit.
+from __future__ import annotations
+
 import csv, ctypes as C, glob, json, math, os, re, shutil, signal, socket, subprocess, sys, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lib"))
@@ -51,7 +53,9 @@ NO_EMERG = (
 )  # kinds with no Emergency (v2: the CPU throttles itself; 2026-09-27); their EMERGENCY entry is the Adaptive "tune" limit
 
 
-def load_limits():  # shared with the dashboard (2026-09-26); the table above stays as the fallback if the file is missing or bad
+def load_limits() -> (
+    None
+):  # shared with the dashboard (2026-09-26); the table above stays as the fallback if the file is missing or bad
     global _limits_mtime
     try:
         m = os.path.getmtime(LIMITS_FILE)
@@ -217,7 +221,7 @@ PROFILES["normal"] = {
 }  # stay at Normal settings even while working (the owner, via dashboard)
 
 
-def run_profile():
+def run_profile() -> tuple[str, dict]:
     """Returns (name, settings). The file may override run_rpm, card_fan or pl for tuning, e.g. {"profile": "unattended", "run_rpm": 8000}."""
     try:
         f = json.load(open(PROFILE_FILE))
@@ -229,7 +233,7 @@ def run_profile():
         return "daytime", PROFILES["daytime"]
 
 
-def pct_for(rpm):
+def pct_for(rpm: float) -> int:
     pts = sorted(FAN_CAL)
     for (p0, r0), (p1, r1) in zip(pts, pts[1:]):
         if rpm <= r1 or (p1, r1) == pts[-1]:
@@ -239,7 +243,7 @@ def pct_for(rpm):
 NORMAL_FAN, RUN_FAN = pct_for(NORMAL_RPM), pct_for(RUN_RPM)
 
 
-def rpm_for(pct):  # inverse of pct_for: the RPM a fan % gives, from FAN_CAL
+def rpm_for(pct: float) -> int:  # inverse of pct_for: the RPM a fan % gives, from FAN_CAL
     pts = sorted(FAN_CAL)
     for (p0, r0), (p1, r1) in zip(pts, pts[1:]):
         if pct <= p1 or (p1, r1) == pts[-1]:
@@ -256,7 +260,7 @@ EVENT_RE = re.compile(
 MODE_RE = re.compile(r"^mode (\S+) -> ([^:\s]+)")
 
 
-def log(msg):
+def log(msg: str) -> None:
     m = MODE_RE.match(msg)
     if EVENT_RE.match(msg) or (
         m and m.group(1) != m.group(2)
@@ -267,21 +271,21 @@ def log(msg):
         f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {msg}\n")
 
 
-def ipmi(*args):
+def ipmi(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run([IPMITOOL, *args], capture_output=True, text=True, timeout=20, env=ENV)
 
 
-def sdr(*args):
+def sdr(*args: str) -> str:
     if not os.path.exists(SDR):
         ipmi("sdr", "dump", SDR)
     return ipmi("-S", SDR, "sdr", *args).stdout
 
 
-def dell_auto():
+def dell_auto() -> None:
     ipmi("raw", "0x30", "0x30", "0x01", "0x01")
 
 
-def set_fan(pct):
+def set_fan(pct: int) -> None:
     if (
         ipmi("raw", "0x30", "0x30", "0x01", "0x00").returncode
         or ipmi("raw", "0x30", "0x30", "0x02", "0xff", f"0x{pct:02x}").returncode
@@ -289,7 +293,7 @@ def set_fan(pct):
         raise RuntimeError("ipmitool fan command failed")
 
 
-def cpu_temps():
+def cpu_temps() -> dict:
     out = {}
     for h in glob.glob("/sys/class/hwmon/hwmon*"):
         if open(f"{h}/name").read().strip() != "coretemp":
@@ -302,7 +306,7 @@ def cpu_temps():
     return out
 
 
-def nvme_temps():
+def nvme_temps() -> dict:
     out = {}
     for h in glob.glob("/sys/class/nvme/nvme*/device/hwmon/hwmon*") + glob.glob("/sys/class/nvme/nvme*/hwmon*"):
         name = "/dev/" + h.split("/sys/class/nvme/")[1].split("/")[0]
@@ -312,29 +316,29 @@ def nvme_temps():
     return out
 
 
-def exhaust_temp():
+def exhaust_temp() -> int | None:
     m = re.search(r"Exhaust Temp\s*\|.*\|\s*(\d+) degrees", sdr("type", "Temperature"))
     return int(m.group(1)) if m else None
 
 
-def inlet_temp():
+def inlet_temp() -> int | None:
     m = re.search(r"Inlet Temp\s*\|.*\|\s*(\d+) degrees", sdr("type", "Temperature"))
     return int(m.group(1)) if m else None
 
 
-def fan_rpm():
+def fan_rpm() -> int | None:
     m = re.search(r"Fan1 RPM\s*\|.*\|\s*(\d+) RPM", sdr("type", "Fan"))
     return int(m.group(1)) if m else None
 
 
-def smart(args):
+def smart(args: list[str]) -> str:
     try:
         return subprocess.run([SMARTCTL, *args], capture_output=True, text=True, timeout=20).stdout
     except subprocess.TimeoutExpired:
         return ""
 
 
-def temp_of(txt):
+def temp_of(txt: str) -> int | None:
     m = (
         re.search(r"Current Drive Temperature:\s+(\d+)", txt)
         or re.search(r"Temperature_Celsius.*?(\d+)(?:\s+\(|\s*$)", txt, re.M)
@@ -347,7 +351,9 @@ PERCCLI = env("PERCCLI", "/usr/local/sbin/perccli64")
 _raid = {"t": None, "at": 0, "next": 0}
 
 
-def raid_temp():  # PERC ROC temperature (2026-09-27, after the hub H730 fault): every 60 s, back off 5 min on failure
+def raid_temp() -> (
+    float | None
+):  # PERC ROC temperature (2026-09-27, after the hub H730 fault): every 60 s, back off 5 min on failure
     now = time.time()
     if now < _raid["next"]:
         return _raid["t"] if now - _raid["at"] < 300 else None
@@ -360,7 +366,7 @@ def raid_temp():  # PERC ROC temperature (2026-09-27, after the hub H730 fault):
     return _raid["t"] if now - _raid["at"] < 300 else None
 
 
-def drive_temps():
+def drive_temps() -> dict:
     out = {}
     if GPU_SERVER:
         for n in re.findall(r"-d megaraid,(\d+)", smart(["--scan"])):
@@ -379,16 +385,16 @@ def drive_temps():
 class Activity:
     """Run Mode is the default while the server works (2026-09-24): CPU, disk or GPU busy; Normal only when idle."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.cpu, self.disk, self.t = self._cpu(), self._disk(), time.time()
 
     @staticmethod
-    def _cpu():
+    def _cpu() -> tuple[int, int]:
         v = [int(x) for x in open("/proc/stat").readline().split()[1:]]
         return sum(v), v[3] + v[4]
 
     @staticmethod
-    def _disk():
+    def _disk() -> dict:
         out = {}
         for line in open("/proc/diskstats"):
             f = line.split()
@@ -396,7 +402,7 @@ class Activity:
                 out[f[2]] = int(f[12])
         return out
 
-    def sample(self):
+    def sample(self) -> str:
         cpu, disk, t = self._cpu(), self._disk(), time.time()
         dt = max(0.1, t - self.t)
         busy = 100 * (1 - (cpu[1] - self.cpu[1]) / max(1, cpu[0] - self.cpu[0]))
@@ -415,10 +421,10 @@ class Activity:
 class Smooth:
     """Per-sensor EWMA (tau ADAPT_EWMA_TAU) and slope in C/min over the last ADAPT_SLOPE_WIN seconds of the EWMA."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.v, self.hist, self.t = {}, {}, None
 
-    def update(self, now, sensors):
+    def update(self, now: float, sensors: dict) -> None:
         dt = 0 if self.t is None else now - self.t
         a = 1 - math.exp(-dt / ADAPT_EWMA_TAU) if dt else 1
         for k, (t, _) in sensors.items():
@@ -429,11 +435,11 @@ class Smooth:
                 h.pop(0)
         self.t = now
 
-    def slope(self, k, win=ADAPT_SLOPE_WIN):
+    def slope(self, k: str, win: float = ADAPT_SLOPE_WIN) -> float:
         h = [p for p in (self.hist.get(k) or []) if p[0] >= (self.hist[k][-1][0] - win)] if self.hist.get(k) else []
         return 0.0 if len(h) < 2 or h[-1][0] - h[0][0] < 30 else 60 * (h[-1][1] - h[0][1]) / (h[-1][0] - h[0][0])
 
-    def proj(self, k):
+    def proj(self, k: str) -> float:
         return self.v[k] + max(0.0, self.slope(k)) * ADAPT_LOOKAHEAD / 60
 
 
@@ -469,11 +475,11 @@ class Equilibrium:
     rpm * ((Tss - inlet) / (aim - inlet)) ** (1 / 0.8). Take the highest over the sensors, set it, wait for the fans to get
     there plus 60 s, re-check. The hottest sensor should then sit at yellow: the lowest RPM that keeps everything in spec."""
 
-    def __init__(self, name="adaptive"):
+    def __init__(self, name: str = "adaptive") -> None:
         self.name, self.unit, self.sm = name, "RPM", Smooth()
         self.reset()
 
-    def reset(self):
+    def reset(self) -> None:
         self.target, self.phase, self.ends, self.phase_start, self.last = None, None, 0, 0, {}
         self.projection, self.down_at, self.down_from, self.blocked, self.settle_reason, self.step_size = (
             None,
@@ -484,7 +490,7 @@ class Equilibrium:
             None,
         )
 
-    def _set(self, now, to, phase, why):
+    def _set(self, now: float, to: float, phase: str, why: str) -> None:
         if to != self.target:
             log(f"{self.name}: {self.target} -> {to} {self.unit} ({why}); {phase}")
             if self.target is not None and to < self.target:
@@ -494,15 +500,26 @@ class Equilibrium:
         ramp = abs(to - (self.target or to)) / FAN_RAMP_RPM * FAN_RAMP_S
         self.target, self.phase, self.phase_start, self.ends = to, phase, now, now + ramp + EQ_DWELL
 
-    def force_max(self, now, max_v, why):
+    def force_max(self, now: float, max_v: float, why: str) -> None:
         if self.target is not None and self.target != max_v:
             self._set(now, max_v, "settle", why)
 
-    def up(self, now, max_v, amount, why):
+    def up(self, now: float, max_v: float, amount: float, why: str) -> None:
         if self.target is not None and self.target < max_v:
             self._set(now, min(max_v, self.target + amount), "settle", why)
 
-    def tick(self, now, sensors, max_v, floor_v, margin_keys=None, jump_keys=None, gpu=None, load=None, ceil_v=None):
+    def tick(
+        self,
+        now: float,
+        sensors: dict,
+        max_v: float,
+        floor_v: float,
+        margin_keys: list[str] | None = None,
+        jump_keys: list[str] | None = None,
+        gpu: tuple | None = None,
+        load: dict | None = None,
+        ceil_v: float | None = None,
+    ) -> float:
         self.sm.update(now, sensors)
         ceil = max(max_v, ceil_v or max_v)
         mk = [
@@ -601,7 +618,7 @@ class Equilibrium:
         self._set(now, new, "settle", why)
         return self.target
 
-    def state(self, max_v, floor_v):
+    def state(self, max_v: float, floor_v: float) -> dict:
         return {
             "target_rpm": self.target,
             "phase": self.phase,
@@ -632,13 +649,15 @@ class CardFan:
     Raises at once (5% steps, re-check after 45 s); lowers at most 10% per 90 s; between card_floor and 100%.
     The case fans help the GPU only once this is at 100% (see Equilibrium.tick's gpu argument)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.sm, self.pct, self.hold, self.last, self.reason = Smooth(), None, 0, {}, None
 
-    def reset(self):
+    def reset(self) -> None:
         self.pct, self.hold = None, 0
 
-    def tick(self, now, t, floor, start, busy=True, reported=None):
+    def tick(
+        self, now: float, t: float, floor: float, start: float, busy: bool = True, reported: float | None = None
+    ) -> float | None:
         self.sm.update(now, {"gpu0": (t, "gpu")})
         if (reported or 0) > 100 or t >= GPU_AIM[0] + 1:  # firmware spike, or past the aim (90C): 100% for 5 min
             self.spike_until = now + CARD_SPIKE_HOLD
@@ -675,7 +694,7 @@ class CardFan:
             self.hold = now + 30
         return self.pct
 
-    def state(self, *_):
+    def state(self, *_: object) -> dict:
         return {
             "target_pct": self.pct,
             "phase": "hold" if self.pct is not None else None,
@@ -689,18 +708,25 @@ class Adaptive:
     settle by trend then a short test; step size by headroom; look-ahead gate; step up on trend; load feed-forward;
     anti-hunt backoff for levels that had to be reverted."""
 
-    def __init__(self, step=ADAPT_STEP, big=ADAPT_STEP_BIG, unit="RPM", name="adaptive", tiny=ADAPT_STEP_TINY):
+    def __init__(
+        self,
+        step: float = ADAPT_STEP,
+        big: float = ADAPT_STEP_BIG,
+        unit: str = "RPM",
+        name: str = "adaptive",
+        tiny: float = ADAPT_STEP_TINY,
+    ) -> None:
         self.step, self.big, self.tiny, self.unit, self.name = step, big, tiny, unit, name
         self.sm = Smooth()
         self.blocked, self.load_hist, self.low_since = {}, [], None
         self.reset()
 
-    def reset(self):
+    def reset(self) -> None:
         self.target, self.phase, self.ends, self.phase_start, self.last, self.raw = None, None, 0, 0, {}, []
         self.settle_reason, self.step_size, self.projection, self.down_at, self.down_from = None, None, None, 0, None
         self.pace = 1.0
 
-    def _set(self, now, to, phase, why):
+    def _set(self, now: float, to: float, phase: str, why: str) -> None:
         if to != self.target:
             log(f"{self.name}: {self.target} -> {to} {self.unit} ({why}); {phase}")
             if (
@@ -721,17 +747,28 @@ class Adaptive:
         self.target, self.phase, self.phase_start = to, phase, now
         self.ends = now + (ADAPT_SETTLE_MIN if phase == "settle" else ADAPT_TEST) * self.pace
 
-    def force_max(self, now, max_v, why):
+    def force_max(self, now: float, max_v: float, why: str) -> None:
         self.pace = 1.0
         if self.target is not None and self.target != max_v:
             self._set(now, max_v, "settle", why)
 
-    def up(self, now, max_v, amount, why):
+    def up(self, now: float, max_v: float, amount: float, why: str) -> None:
         self.pace = 1.0
         if self.target is not None and self.target < max_v:
             self._set(now, min(max_v, self.target + amount), "settle", why)
 
-    def tick(self, now, sensors, max_v, floor_v, margin_keys=None, jump_keys=None, gpu=None, load=None, ceil_v=None):
+    def tick(
+        self,
+        now: float,
+        sensors: dict,
+        max_v: float,
+        floor_v: float,
+        margin_keys: list[str] | None = None,
+        jump_keys: list[str] | None = None,
+        gpu: tuple | None = None,
+        load: dict | None = None,
+        ceil_v: float | None = None,
+    ) -> float:
         """sensors {name: (temp, kind)}. margin_keys: sensors needing the enter-8 look-ahead (default all). jump_keys: sensors
         whose raw +5C/60s or near-enter sends to max (default all). gpu: (name, limit), judged by its own look-ahead limit and
         counted for the jump only when near its emergency. load: {name: %} for the feed-forward."""
@@ -901,7 +938,7 @@ class Adaptive:
             self.phase, self.phase_start, self.ends = "test", now, now + ADAPT_TEST * self.pace
         return self.target
 
-    def state(self, max_v, floor_v, unit="rpm"):
+    def state(self, max_v: float, floor_v: float, unit: str = "rpm") -> dict | None:
         if not self.target:
             return None
         now = time.time()
@@ -925,8 +962,8 @@ _rapl = {"w": None}
 
 
 def apply_freq(
-    low,
-):  # both hosts: cap CPU clock to its minimum in low modes (2026-09-28: lower CPU wattage; RAPL alone didn't hold)
+    low: bool,
+) -> None:  # both hosts: cap CPU clock to its minimum in low modes (2026-09-28: lower CPU wattage; RAPL alone didn't hold)
     try:
         for c in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq"):
             src = "cpuinfo_min_freq" if low else "cpuinfo_max_freq"
@@ -939,7 +976,7 @@ def apply_freq(
         log(f"cpu clock cap failed: {e}")
 
 
-def apply_dram(low):  # GPU server: memory RAPL cap per socket in low modes, uncapped otherwise
+def apply_dram(low: bool) -> None:  # GPU server: memory RAPL cap per socket in low modes, uncapped otherwise
     try:
         for d in glob.glob("/sys/class/powercap/intel-rapl:*:*"):
             with open(os.path.join(d, "name")) as f:
@@ -955,7 +992,9 @@ def apply_dram(low):  # GPU server: memory RAPL cap per socket in low modes, unc
         log(f"memory power cap failed: {e}")
 
 
-def apply_rapl(w):  # hub: iDRAC DCMI whole-server cap (its BIOS locks RAPL). Both hosts: CPU clock cap via apply_freq.
+def apply_rapl(
+    w: int | None,
+) -> None:  # hub: iDRAC DCMI whole-server cap (its BIOS locks RAPL). Both hosts: CPU clock cap via apply_freq.
     if w == _rapl["w"]:
         return
     apply_freq(w == RAPL_LOW)
@@ -971,7 +1010,7 @@ THROTTLE_FILE = "/dev/shm/power-throttle.json"  # written by the dashboard's POS
 _gpu_th = {"t": 0.0, "w": None, "by": None}
 
 
-def gpu_throttle_w():
+def gpu_throttle_w() -> float | None:
     """GPU server: power-guard's lower-only GPU power-limit throttle (2026-10-01: GPU joins the power-target levers).
     GET /api/throttle every 10 s; an expired or missing throttle = no bound. The profile limit stays the ceiling."""
     now = time.time()
@@ -991,7 +1030,7 @@ def gpu_throttle_w():
 _dcmi = {"cap": None}
 
 
-def apply_dcmi():  # hub: mode cap, lowered (never raised) by an unexpired power-management throttle; called every tick
+def apply_dcmi() -> None:  # hub: mode cap, lowered (never raised) by an unexpired power-management throttle; called every tick
     if GPU_SERVER or _rapl["w"] is None:
         return
     cap, why = (DCMI_LOW, "low mode") if _rapl["w"] == RAPL_LOW else (DCMI_HIGH, "normal")
@@ -1041,7 +1080,7 @@ GPU_CASE_CARD_MIN, GPU_CASE_HOLD_S, GPU_CASE_EASE_BELOW, GPU_CASE_REF_W = (
 _gcf = {"rpm": None, "since": 0, "last_down": 0, "why": "", "draws": []}
 
 
-def gpu_case_floor(now, gs, busy, draw):
+def gpu_case_floor(now: float, gs: dict, busy: bool, draw: float | None) -> int | None:
     t, card = gs.get("temp") or 0, gs.get("card_fan") or 0
     pl = gs.get("limit_set") or gs.get("limit") or 250
     _gcf["draws"] = [(a, w) for a, w in _gcf["draws"] if now - a <= 120] + [(now, draw or 0)]
@@ -1086,7 +1125,7 @@ CARD_PAUSED_PCT, CARD_PAUSED_MAX_C = (
 CARD_PAUSED_WARM = (77, 73, 50)  # warm step kept for tuning; same 50% for now
 
 
-def _pstart(pid):
+def _pstart(pid: int) -> str | None:
     try:
         with open(f"/proc/{pid}/stat") as f:
             return f.read().rsplit(")", 1)[1].split()[19]
@@ -1094,7 +1133,7 @@ def _pstart(pid):
         return None
 
 
-def _cmd(pid):
+def _cmd(pid: int) -> str:
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
             return f.read().replace(b"\0", b" ").decode(errors="replace").strip()
@@ -1102,7 +1141,7 @@ def _cmd(pid):
         return ""
 
 
-def _pstate(pid):
+def _pstate(pid: int) -> str | None:
     try:
         with open(f"/proc/{pid}/stat") as f:
             return f.read().rsplit(")", 1)[1].split()[0]
@@ -1110,7 +1149,7 @@ def _pstate(pid):
         return None
 
 
-def _hooks():  # {hook name: [compiled "# manages:" regexes]} from /dev/shm/power-hooks
+def _hooks() -> dict:  # {hook name: [compiled "# manages:" regexes]} from /dev/shm/power-hooks
     out = {}
     for hk in sorted(glob.glob("/dev/shm/power-hooks/*")):
         if not os.path.isfile(hk) or not os.access(hk, os.X_OK) or hk.endswith((".json", ".log", ".tmp")):
@@ -1123,7 +1162,7 @@ def _hooks():  # {hook name: [compiled "# manages:" regexes]} from /dev/shm/powe
     return out
 
 
-def gpu_census():
+def gpu_census() -> tuple:
     """Who is on the GPU right now, found from the driver rather than by name (2026-09-28: the GPU jobs change):
     - gpu: every process NVML lists as a compute app (with its VRAM);
     - server: a gpu process with a listening TCP port (llama-server, ollama, vLLM, ...). Never frozen: its clients are;
@@ -1214,8 +1253,8 @@ def gpu_census():
 
 
 def gpu_pause(
-    on, now
-):  # 2026-09-28: Low Power pauses the GPU jobs without losing work (SIGSTOP / SIGCONT; state stays in memory)
+    on: bool, now: float
+) -> list:  # 2026-09-28: Low Power pauses the GPU jobs without losing work (SIGSTOP / SIGCONT; state stays in memory)
     if not GPU:
         return []
     if _gp["held"] is None:
@@ -1303,7 +1342,9 @@ def gpu_pause(
     return held
 
 
-def meeting_on():  # the dashboard's "meeting" flag rides in the Quick Cool file (the GPU server agent copies it); stale after 60 s = off
+def meeting_on() -> (
+    bool
+):  # the dashboard's "meeting" flag rides in the Quick Cool file (the GPU server agent copies it); stale after 60 s = off
     try:
         q = json.load(open(QUICK_COOL))
         return bool(q.get("meeting")) and time.time() - q["ts"] < QUICK_COOL_STALE
@@ -1311,7 +1352,7 @@ def meeting_on():  # the dashboard's "meeting" flag rides in the Quick Cool file
         return False
 
 
-def quick_cool():  # 2026-09-27: Quick Cool = fans 100% only (was the file's pct, 80); no wattage change
+def quick_cool() -> int | None:  # 2026-09-27: Quick Cool = fans 100% only (was the file's pct, 80); no wattage change
     try:
         q = json.load(open(QUICK_COOL))
         return 100 if q.get("on") and time.time() - q["ts"] < QUICK_COOL_STALE else None
@@ -1324,7 +1365,7 @@ class Util(C.Structure):
 
 
 class Gpu:
-    def __init__(self):
+    def __init__(self) -> None:
         self.n = C.CDLL("libnvidia-ml.so.1")
         if self.n.nvmlInit_v2():
             raise RuntimeError("nvmlInit failed")
@@ -1336,12 +1377,12 @@ class Gpu:
         self.card_manual = None
         subprocess.run(["nvidia-smi", "-pm", "1"], capture_output=True, timeout=20)
 
-    def _u(self, fn, *a):
+    def _u(self, fn: str, *a: object) -> int:
         v = C.c_uint()
         getattr(self.n, fn)(self.h, *a, C.byref(v))
         return v.value
 
-    def read(self):
+    def read(self) -> dict:
         u = Util()
         self.n.nvmlDeviceGetUtilizationRates(self.h, C.byref(u))
         return {
@@ -1353,11 +1394,11 @@ class Gpu:
             "sm_mhz": self._u("nvmlDeviceGetClockInfo", 1),
         }
 
-    def set_limit(self, w):
+    def set_limit(self, w: int) -> None:
         if self.n.nvmlDeviceSetPowerManagementLimit(self.h, int(w * 1000)):
             subprocess.run(["nvidia-smi", "-pl", str(w)], capture_output=True, timeout=20)
 
-    def card(self, pct):
+    def card(self, pct: int | None) -> None:
         if pct == self.card_manual:
             return
         for i in self.fans:
@@ -1368,7 +1409,7 @@ class Gpu:
         self.card_manual = pct
 
 
-def open_gpu():
+def open_gpu() -> Gpu | None:
     if not shutil.which("nvidia-smi"):
         return None
     try:
@@ -1381,7 +1422,7 @@ def open_gpu():
 GPU = open_gpu()
 
 
-def hand_back(why):
+def hand_back(why: str) -> None:
     dell_auto()
     if GPU:
         GPU.card(None)
@@ -1389,7 +1430,7 @@ def hand_back(why):
     log(f"{why}: Dell auto fans" + (f", card fan automatic, power limit {PL_FIXED} W" if GPU else ""))
 
 
-def main():
+def main() -> None:
     signal.signal(signal.SIGTERM, lambda *a: (hand_back("stopped"), sys.exit(0)))
     cur, mode, drives, last_drive = None, None, {}, 0
     hot = set()  # sensors currently in emergency (entered, not yet cleared)

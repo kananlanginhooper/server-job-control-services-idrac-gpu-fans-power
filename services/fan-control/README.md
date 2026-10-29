@@ -8,6 +8,7 @@ One thermal controller per server, so nothing fights over the fans. Fixed modes,
 - Hub: the iDRAC DCMI whole-server power cap for the run mode, lowered (never raised) by an unexpired power-guard throttle.
 - GPU server: the GPU card fan and power limit (`nvidia-smi`), the GPU power limit lowered by the throttle (`/api/throttle` `<GPU_THROTTLE_KEY>`, floor 100 W). It pauses the listed GPU jobs in Low Power.
 - **Fails safe:** on any error or exit it hands the fans back to Dell automatic, the card fan to automatic, and the power limit to the fixed value.
+- **After a restart** an adaptive mode starts at the profile's case-fan RPM, then steps down to its equilibrium over a few minutes (louder fans briefly; not a fault).
 
 | | |
 |---|---|

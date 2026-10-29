@@ -1,6 +1,7 @@
 #!/bin/bash
 # Install / update the task runner template on this server (run as <user> with passwordless sudo; same on hub, GPU server, GPU desktop).
-# Deploy from the laptop:  scp -r services/taskrunner <host>:/tmp/ && ssh <host> 'bash /tmp/taskrunner/install.sh'
+# Run it from the server's repo clone:  bash <clone>/services/taskrunner/install.sh
+# Settings come from the clone's shared .env (svcenv): the unit gets SERVICES_ENV_FILE=<clone>/.env.
 set -euo pipefail
 src=$(cd "$(dirname "$0")" && pwd)
 me=$(id -un)   # the runner's OS user (the unit's User=)
@@ -15,8 +16,11 @@ sudo -n -u postgres psql -qAt -c "select 1 from pg_roles where rolname='$me'" | 
 sudo -n -u postgres psql -qAt -c "select 1 from pg_database where datname='taskrunner'" | grep -q 1 || sudo -n -u postgres createdb -O "$me" taskrunner
 sudo -n install -d /opt/taskrunner
 sudo -n install -m 755 "$src/taskrunner.py" "$src/taskctl" /opt/taskrunner/
+sudo -n install -m 644 "$src/../../lib/svcenv.py" /opt/taskrunner/
+envfile=$(cd "$src/../.." && pwd)/.env
+[ -f "$envfile" ] || echo "warning: $envfile missing; the runner will use its defaults" >&2
 sudo -n ln -sf /opt/taskrunner/taskctl /usr/local/bin/taskctl
-sed "s/^User=.*/User=$me/" "$src/taskrunner.service" | sudo -n tee /etc/systemd/system/taskrunner.service >/dev/null
+sed -e "s/^User=.*/User=$me/" -e "s|^Environment=SERVICES_ENV_FILE=.*|Environment=SERVICES_ENV_FILE=$envfile|" "$src/taskrunner.service" | sudo -n tee /etc/systemd/system/taskrunner.service >/dev/null
 mkdir -p ~/taskrunner/logs
 sudo -n systemctl daemon-reload
 sudo -n systemctl enable taskrunner >/dev/null 2>&1

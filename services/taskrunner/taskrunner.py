@@ -7,11 +7,17 @@
 # running processes match the table:
 #   continuous  keep `instances` copies running; a crashed copy is restarted with back-off (30 s doubling to 15 min, reset after
 #               10 min of healthy running)
-#   schedule    run once every `every_secs` (one copy at a time)
+#   schedule    run once every `every_secs`, or at each wall-clock time in `at_times` ('HH:MM', TASKRUNNER_TZ); one copy at a
+#               time. The last start comes from task_runs, so a runner restart does not re-run schedules; a slot missed
+#               while the server was down (or a need was missing) runs once when it can
 #   oneshot     run once after the row is enabled or changed (a successful run ends it)
+# instances_by_power (jsonb, continuous only): {"<combined_w>": instances}; the step at or below the power target's
+#                combined_w wins (below the lowest step: the lowest step). Power API unreachable = the row's `instances`.
+#                Scaling down stops the extra copies like `taskctl set --instances` does.
 # needs (jsonb): {"paths": [...]} every path must answer (checked off the main loop, so a hung mount never blocks the runner),
 #                {"http": [...]} every URL must answer, {"gpu": true} = do not START while the power target says Low Power
 #                (scale=down; running copies are left to finish their item). A missing need = wait quietly, never an error.
+# task_runs older than TASKRUNNER_KEEP_DAYS (default 30, 0 = keep all) are pruned hourly; each task's latest run is kept.
 # Processes are started in their own process group (TASK_NAME / TASK_INSTANCE in the environment) and stopped with SIGTERM,
 # then SIGKILL after `stop_secs`. Logs: <LOG_DIR>/<task>.<instance>.log, trimmed at 50 MB (one .1 kept).
 # Read-only status: http://<host>:8098/  (JSON: tasks + live processes). Changes go through the table (taskctl).
@@ -26,16 +32,28 @@ import sys
 import threading
 import time
 import urllib.request
+from datetime import datetime, timedelta, tzinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from zoneinfo import ZoneInfo
 
-import psycopg
+try:
+    import psycopg
+except ImportError:  # the pure schedule/sizing helpers below are testable without it
+    psycopg = None
+
+# the shared .env: svcenv.py sits next to the installed copy (install.sh), or in the repo's lib/ when run from a clone
+_here = os.path.dirname(os.path.realpath(__file__))
+sys.path[:0] = [_here, os.path.join(_here, "..", "..", "lib")]
+from svcenv import env  # noqa: E402
 
 HOST = socket.gethostname()
-DSN = os.environ.get("TASKRUNNER_DSN", "dbname=taskrunner")
-LOG_DIR = os.environ.get("TASKRUNNER_LOGS", os.path.expanduser("~/taskrunner/logs"))
-POWER_URL = os.environ.get("TASKRUNNER_POWER_URL", os.environ.get("HUB_API_URL", "http://localhost:8090") + "/api/powertarget")
-PORT = int(os.environ.get("TASKRUNNER_PORT", "8098"))
-TICK, BACKOFF_MIN, BACKOFF_MAX, HEALTHY_SECS, LOG_MAX = 5, 30, 900, 600, 50_000_000
+DSN = env("TASKRUNNER_DSN", "dbname=taskrunner")
+LOG_DIR = env("TASKRUNNER_LOGS", os.path.expanduser("~/taskrunner/logs"))
+POWER_URL = env("TASKRUNNER_POWER_URL", env("HUB_API_URL", "http://localhost:8090") + "/api/powertarget")
+PORT = int(env("TASKRUNNER_PORT", "8098"))
+TZ = ZoneInfo(env("TASKRUNNER_TZ")) if env("TASKRUNNER_TZ") else None  # None = the server's local time
+KEEP_DAYS = int(env("TASKRUNNER_KEEP_DAYS", "30"))
+TICK, BACKOFF_MIN, BACKOFF_MAX, HEALTHY_SECS, LOG_MAX, PRUNE_SECS = 5, 30, 900, 600, 50_000_000, 3600
 
 SCHEMA = """
 create table if not exists tasks(
@@ -53,6 +71,8 @@ create table if not exists tasks(
   enabled boolean not null default true,
   updated_at timestamptz not null default now()
 );
+alter table tasks add column if not exists at_times text[];             -- schedule: daily 'HH:MM' (overrides every_secs)
+alter table tasks add column if not exists instances_by_power jsonb;    -- continuous: {"<combined_w>": instances}
 create table if not exists task_runs(
   id bigserial primary key,
   task text not null,
@@ -76,12 +96,61 @@ def log(msg: str) -> None:
     print(time.strftime("%F %T"), msg, flush=True)
 
 
+def at_slots(at_times: list[str], now: float, tz: tzinfo | None = TZ) -> tuple[float, float]:
+    """(latest slot at or before now, next slot after now) as epoch seconds, for daily 'HH:MM' times in tz."""
+    today = datetime.fromtimestamp(now, tz).date()
+    prev, nxt = 0.0, float("inf")
+    for s in at_times:
+        hh, mm = (int(x) for x in s.split(":"))
+        for d in (-1, 0, 1):
+            dt = datetime(today.year, today.month, today.day, hh, mm, tzinfo=tz) + timedelta(days=d)
+            ts = dt.timestamp()
+            if ts <= now:
+                prev = max(prev, ts)
+            else:
+                nxt = min(nxt, ts)
+    return prev, nxt
+
+
+def schedule_due(t: dict, last: float | None, now: float, tz: tzinfo | None = TZ) -> tuple[bool, str]:
+    """Is a schedule task due? `last` = its last recorded start (None = never ran)."""
+    if t.get("at_times"):
+        prev, nxt = at_slots(t["at_times"], now, tz)
+        # never ran: wait for the first slot after the row was written instead of running at once
+        since = last if last is not None else t.get("updated", now)
+        if since < prev:
+            return True, ""
+        return False, "next " + datetime.fromtimestamp(nxt, tz).strftime("%a %H:%M")
+    if last is None or now - last >= (t.get("every_secs") or 3600):
+        return True, ""
+    return False, "scheduled"
+
+
+def wanted_instances(t: dict, power: dict | None) -> int:
+    """How many copies a task should have now: 1 for schedule/oneshot; continuous follows instances_by_power if set."""
+    if t["kind"] != "continuous":
+        return 1
+    n = t["instances"]
+    steps = t.get("instances_by_power")
+    w = (power or {}).get("combined_w")
+    if steps and isinstance(w, (int, float)):
+        steps = sorted((int(k), int(v)) for k, v in steps.items())
+        n = steps[0][1]
+        for k, v in steps:
+            if w >= k:
+                n = v
+    return max(0, n)
+
+
 class Need:
     """Need checks run in a background thread; the main loop only reads the last result (a hung NFS path can't stall it)."""
 
-    def __init__(self) -> None:
+    def __init__(self, start: bool = True) -> None:
         self.ok, self.why, self.lock, self.wanted = {}, {}, threading.Lock(), {}
-        threading.Thread(target=self.loop, daemon=True).start()
+        self.power = None  # last /api/powertarget answer (None = unreachable or not needed)
+        self.sized = False  # some task uses instances_by_power: fetch the power target even with no gpu need
+        if start:
+            threading.Thread(target=self.loop, daemon=True).start()
 
     def want(self, name: str, needs: dict) -> None:
         with self.lock:
@@ -107,17 +176,25 @@ class Need:
             return False
 
     @staticmethod
-    def low_power() -> bool:
+    def fetch_power() -> dict | None:
         try:
-            return json.load(urllib.request.urlopen(POWER_URL, timeout=5)).get("scale") == "down"
+            return json.load(urllib.request.urlopen(POWER_URL, timeout=5))
         except Exception:
-            return False  # power API unreachable: don't hold work back (the guard still trims)
+            return None  # power API unreachable: don't hold work back (the guard still trims)
+
+    def get_power(self) -> dict | None:
+        with self.lock:
+            return self.power
 
     def loop(self) -> None:
         while True:
             with self.lock:
                 wanted = dict(self.wanted)
-            lp = None
+                sized = self.sized
+            power = self.fetch_power() if sized or any(n.get("gpu") for n in wanted.values()) else None
+            with self.lock:
+                self.power = power
+            lp = (power or {}).get("scale") == "down"
             for name, n in wanted.items():
                 why = None
                 for p in n.get("paths") or []:
@@ -130,7 +207,6 @@ class Need:
                             why = f"waiting for {u}"
                             break
                 if not why and n.get("gpu"):
-                    lp = self.low_power() if lp is None else lp
                     if lp:
                         why = "Low Power: GPU work does not start"
                 with self.lock:
@@ -149,7 +225,10 @@ class Runner:
         self.db = None
         self.procs = {}  # (task, inst) -> Proc
         self.backoff = {}  # (task, inst) -> (next_start_at, delay)
-        self.last_sched = {}  # task -> last start time (schedule)
+        self.last_sched = {}  # task -> last start time (schedule); seeded from task_runs so restarts don't re-run
+        self.seeded = False
+        self.last_prune = 0.0
+        self.want = {}  # task -> copies wanted at the last tick (instances_by_power applied)
         self.tasks = {}
         self.need = Need()
         self.state = {}  # (task, inst) -> short text for the status page
@@ -174,10 +253,17 @@ class Runner:
     def load(self) -> bool:
         rows = self.q(
             "select name, command, workdir, env, kind, instances, every_secs, needs, nice, stop_secs, enabled, "
-            "extract(epoch from updated_at) from tasks"
+            "extract(epoch from updated_at), at_times, instances_by_power from tasks"
         )
         if rows is None:
             return False  # keep running what we have; retry next tick
+        if not self.seeded:
+            last = self.q("select task, extract(epoch from max(started_at))::float8 from task_runs group by task")
+            if last is None:
+                return False
+            for name, ts in last:
+                self.last_sched.setdefault(name, ts)
+            self.seeded = True
         self.tasks = {
             r[0]: dict(
                 zip(
@@ -194,6 +280,8 @@ class Runner:
                         "stop_secs",
                         "enabled",
                         "updated",
+                        "at_times",
+                        "instances_by_power",
                     ),
                     r,
                 )
@@ -202,7 +290,23 @@ class Runner:
         }
         for t in self.tasks.values():
             self.need.want(t["name"], t["needs"] or {})
+        with self.need.lock:
+            self.need.sized = any(t["instances_by_power"] and t["enabled"] for t in self.tasks.values())
         return True
+
+    def prune(self) -> None:
+        """Hourly: drop task_runs older than KEEP_DAYS, always keeping each task's latest run (its schedule anchor)."""
+        if KEEP_DAYS <= 0 or time.time() - self.last_prune < PRUNE_SECS:
+            return
+        self.last_prune = time.time()
+        r = self.q(
+            "with gone as (delete from task_runs r where r.started_at < now() - make_interval(days => %s) "
+            "and exists (select 1 from task_runs n where n.task = r.task and n.started_at > r.started_at) returning 1) "
+            "select count(*) from gone",
+            (KEEP_DAYS,),
+        )
+        if r and r[0][0]:
+            log(f"pruned {r[0][0]} task_runs rows older than {KEEP_DAYS} days")
 
     # ---------- processes ----------
     def start(self, t: dict, inst: int) -> None:
@@ -285,10 +389,13 @@ class Runner:
         self.reap()
         if not self.load():
             return
+        self.prune()
         now = time.time()
+        power = self.need.get_power()
+        want = {name: wanted_instances(t, power) for name, t in self.tasks.items()}
         for _key, pr in list(self.procs.items()):  # stop what is no longer wanted
             t = self.tasks.get(pr.task)
-            if not t or not t["enabled"] or pr.inst >= t["instances"]:
+            if not t or not t["enabled"] or pr.inst >= want[pr.task]:
                 self.stop(pr, "disabled or fewer instances")
             elif pr.stopping is not None:
                 self.stop(pr, "")
@@ -296,7 +403,7 @@ class Runner:
             if not t["enabled"]:
                 continue
             ok, why = self.need.get(t["name"])
-            n = 1 if t["kind"] in ("schedule", "oneshot") else max(0, t["instances"])
+            n = want[t["name"]]
             for inst in range(n):
                 key = (t["name"], inst)
                 if key in self.procs:
@@ -308,14 +415,17 @@ class Runner:
                 if now < self.backoff.get(key, (0, 0))[0]:
                     self.state[key] = f"restart in {int(self.backoff[key][0] - now)} s"
                     continue
-                if t["kind"] == "schedule" and now - self.last_sched.get(t["name"], 0) < (t["every_secs"] or 3600):
-                    self.state[key] = "scheduled"
-                    continue
+                if t["kind"] == "schedule":
+                    due, wait = schedule_due(t, self.last_sched.get(t["name"]), now)
+                    if not due:
+                        self.state[key] = wait
+                        continue
                 self.start(t, inst)
         for key in list(self.state):
             t = self.tasks.get(key[0])
-            if not t or not t["enabled"] or key[1] >= (1 if t["kind"] != "continuous" else t["instances"]):
+            if not t or not t["enabled"] or key[1] >= want[key[0]]:
                 self.state.pop(key, None)
+        self.want = want
 
     def status(self) -> dict:
         return {
@@ -327,6 +437,7 @@ class Runner:
                     "kind": t["kind"],
                     "enabled": t["enabled"],
                     "instances": t["instances"],
+                    "wanted": self.want.get(t["name"], t["instances"]) if t["enabled"] else 0,
                     "running": sum(1 for k in self.procs if k[0] == t["name"]),
                     "state": {str(k[1]): v for k, v in sorted(self.state.items()) if k[0] == t["name"]},
                 }

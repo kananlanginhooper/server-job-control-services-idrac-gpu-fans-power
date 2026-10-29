@@ -3,17 +3,25 @@
 # taskrunner.service within ~5 s.
 #   taskctl list                          tasks + live state (from the runner's status page)
 #   taskctl add NAME --cmd 'CMD' [--workdir D] [--env K=V ...] [--kind continuous|schedule|oneshot] [--instances N]
-#                    [--every SECS] [--need-path P ...] [--need-http URL ...] [--gpu] [--nice N] [--desc TEXT] [--disabled]
-#   taskctl set NAME [--instances N] [--cmd ...] [--every SECS] [--nice N] [--desc TEXT]
+#                    [--every SECS | --at HH:MM ...] [--power W=N ...] [--need-path P ...] [--need-http URL ...] [--gpu]
+#                    [--nice N] [--desc TEXT] [--disabled]
+#       --at       schedule at daily wall-clock times (TASKRUNNER_TZ; replaces --every); --at none clears them
+#       --power    continuous: N copies when the power target's combined_w >= W (e.g. --power 1000=1 --power 1500=2);
+#                  --power none clears it
+#   taskctl set NAME [--instances N] [--cmd ...] [--every SECS] [--at HH:MM ...] [--power W=N ...] [--nice N] [--desc TEXT]
 #   taskctl enable NAME | disable NAME | rm NAME
 #   taskctl runs NAME [N]                 last N runs (default 10)
 #   taskctl log NAME [INSTANCE] [LINES]   tail of the task's log
-import argparse, json, os, subprocess, sys, urllib.request
+import argparse, json, os, re, subprocess, sys, urllib.request
 import psycopg
 
-DSN = os.environ.get("TASKRUNNER_DSN", "dbname=taskrunner")
-LOG_DIR = os.environ.get("TASKRUNNER_LOGS", os.path.expanduser("~/taskrunner/logs"))
-PORT = int(os.environ.get("TASKRUNNER_PORT", "8098"))
+_here = os.path.dirname(os.path.realpath(__file__))
+sys.path[:0] = [_here, os.path.join(_here, "..", "..", "lib")]
+from svcenv import env  # shared .env (installed next to taskctl, or the repo's lib/)
+
+DSN = env("TASKRUNNER_DSN", "dbname=taskrunner")
+LOG_DIR = env("TASKRUNNER_LOGS", os.path.expanduser("~/taskrunner/logs"))
+PORT = int(env("TASKRUNNER_PORT", "8098"))
 
 
 def db():
@@ -31,6 +39,7 @@ def main():
         a.add_argument("--workdir"); a.add_argument("--env", action="append", default=[])
         a.add_argument("--kind", choices=("continuous", "schedule", "oneshot"))
         a.add_argument("--instances", type=int); a.add_argument("--every", type=int)
+        a.add_argument("--at", action="append", default=[]); a.add_argument("--power", action="append", default=[])
         a.add_argument("--need-path", action="append", default=[]); a.add_argument("--need-http", action="append", default=[])
         a.add_argument("--gpu", action="store_true"); a.add_argument("--nice", type=int); a.add_argument("--desc")
         a.add_argument("--disabled", action="store_true")
@@ -49,7 +58,7 @@ def main():
         print(f"{'task':28} {'kind':10} {'on':3} {'run/want':9} state")
         for t in st["tasks"]:
             states = sorted(set(t["state"].values())) or ["-"]
-            want = t["instances"] if t["kind"] == "continuous" else 1
+            want = t.get("wanted", t["instances"] if t["kind"] == "continuous" else 1)
             print(f"{t['name']:28} {t['kind']:10} {'y' if t['enabled'] else 'n':3} {str(t['running']) + '/' + str(want):9} {'; '.join(states)}")
         return
     c = db()
@@ -62,6 +71,20 @@ def main():
             f["every_secs"] = a.every
         if a.desc is not None:
             f["description"] = a.desc
+        if a.at == ["none"]:
+            f["at_times"] = None
+        elif a.at:
+            bad = [x for x in a.at if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", x)]
+            if bad:
+                sys.exit(f"--at wants HH:MM (24 h): {bad}")
+            f["at_times"] = sorted(set(a.at))
+        if a.power == ["none"]:
+            f["instances_by_power"] = None
+        elif a.power:
+            try:
+                f["instances_by_power"] = json.dumps({str(int(w)): int(n) for w, n in (x.split("=", 1) for x in a.power)})
+            except ValueError:
+                sys.exit("--power wants WATTS=COPIES, e.g. --power 1000=1")
         if a.env:
             f["env"] = json.dumps(dict(e.split("=", 1) for e in a.env))
         needs = {}

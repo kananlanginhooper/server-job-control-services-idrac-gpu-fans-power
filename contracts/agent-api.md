@@ -1,11 +1,14 @@
-# Agent API contract: control container ⇄ per-server agent (version 1)
+# Agent API contract: control container ⇄ per-server agent (version 2)
 
 **This file is the one source of truth** for the API between the control container (owner: the Recovery page thread; `hub/`, FastAPI) and the per-server agent (owner: Server Services; the task runner growing into the agent).
 
 - The container repo pins this file by commit and keeps no copy.
 - A runnable reference of the container side is [`mocks/agent_api.py`](../mocks/agent_api.py), with tests in [`tests/test_agent_api.py`](../tests/test_agent_api.py). Both sides test against it.
 - A breaking change bumps the version and is announced to the other side before it's pushed. Fields are added freely, never renamed or removed within a version. Unknown fields are ignored.
-- Agreed 2026-10-29 by both owners (git tag `agent-api-v1`). Later the same day the owner fixed the core safety layer as permanent (section 1). That clarifies the transition plan only; no endpoint or payload changed, so it is still v1. Nothing implements it on a live server yet; go-lives are the owner's call.
+- History: v1 agreed 2026-10-29 (tag `agent-api-v1`). **v2** the same day (tag `agent-api-v2`), on the owner's decisions:
+  - `fan.override` and `gpu.limit` are removed from the agent commands: fan override and the GPU power limit go through :8090, as standard operation;
+  - emergencies stay purely local on each server;
+  - the orders database is named `server_job_control_orders`.
 
 **Direction (owner, 2026-10-29):**
 - ONE control container holds the REST API, the database access and the queue for every server.
@@ -17,7 +20,7 @@
 | | Control container (Recovery) | Per-server agent (Server Services) |
 |---|---|---|
 | Runs as | Docker, one instance | bare OS (systemd), one per server: the **task runner grows into the agent** |
-| Holds | desired state for every server (Postgres database `sjc`, own role), the command queue, the work queue, history | a local copy of its own orders (local Postgres `taskrunner`), so it boots and runs without the container |
+| Holds | desired state for every server (Postgres database `server_job_control_orders`, own role), the command queue, the work queue, history | a local copy of its own orders (local Postgres `taskrunner`), so it boots and runs without the container |
 | Talks | answers HTTP | **pulls** (the container never connects to a server); long-poll keeps commands fast |
 | Hardware | none | everything host-level: systemd, ipmitool/DCMI, RAPL, `nvidia-smi`, jobs |
 
@@ -26,7 +29,13 @@
 **power-guard, fan-control and gpu-switch are separate system services on every server where they run, permanently.** So is wherever the run mode and power target live, if not inside one of those three.
 - They are never folded into the task runner or the agent, and they never depend on the control container.
 - power-guard is the safety mechanism, and it sometimes operates fan-control.
-- The agent may *report* their state and *pass* a command to them through their own interfaces (`fan.override`, `gpu.limit`). It never replaces them, and they keep working when the agent or the container is down.
+- The agent only *reports* their state. It never commands or replaces them, and they keep working when the agent or the container is down.
+- **Their controls stay on :8090** (owner: "standard operation"):
+  - fan override and the GPU power limit;
+  - the global modes: Quick Cool, meeting mode and the adaptive run profile;
+  - power target and the GPU switch.
+  The container may show them and forward a request to :8090, never send it to an agent.
+- **Emergencies are purely local** in fan-control on each server, with every container down: "The server is in charge of maintaining itself within the specifications of temperature."
 
 Why pull and not push:
 - Servers behind NAT (Tug) work unchanged.
@@ -109,7 +118,7 @@ Why pull and not push:
 ## 6. Commands (one-off)
 
 - **At most once:** a command is handed to one claim only. If it's not finished by `expires_at`, the container marks it `expired`, never hands it out again, and answers a late result with `409`.
-- **Expiry, set by the container at queue time:** hardware commands (`fan.override`, `gpu.limit`) expire **30 s after they're queued**, so a stale fan command never runs late. The others expire after 10 min.
+- **Expiry, set by the container at queue time:** 10 min. There are no hardware commands on this path (section 1).
 - The agent checks `expires_at` against the container's time (the `Date` header of the claim reply) and drops anything already expired.
 - **Results:**
   - `{ok: true, ...}` = done;
@@ -121,13 +130,11 @@ Why pull and not push:
 | `task.restart` | `{name, instance?}` | stops the copies; the loop restarts them | unknown task |
 | `task.run_now` | `{name}` | runs a `schedule` task once now | not a schedule task |
 | `unit.restart` | `{unit}` | `systemctl restart <unit>` | unit not in this server's allow-list (`<HOST>_AGENT_UNITS`) |
-| `fan.override` | `{pct, minutes, by}` | same as the sjc-agent's `fan_override` | outside fan-control's limits, or an Emergency is active |
-| `gpu.limit` | `{watts, minutes, by}` | same as the sjc-agent's `gpu_limit` | outside the card's min/max |
 | `agent.resync` | `{}` | re-pulls orders with `version=0` | never |
 
-**REST is the one durable command path:**
-- The container's `/api/v1/servers/{host}/fans` and `/gpu-limit` routes enqueue a command and wait up to about 15 s for its result; otherwise they answer `202 {id}`, and `GET /api/v1/commands/{id}` gives the outcome later.
-- MQTT ([`mqtt-topics.md`](mqtt-topics.md)) stays for **live state** only. Its `cmd/*` topics retire with MQTT contract v2, announced first; until then the container may still publish them.
+These four are the whole command set. Fan override and the GPU power limit are not agent commands: they go through :8090 (section 1).
+
+MQTT ([`mqtt-topics.md`](mqtt-topics.md)) is for **live state only**. Its `cmd/*` topics are deprecated (no new users) and are removed in MQTT contract v2.
 
 ## 7. Work queue (in the container's database)
 

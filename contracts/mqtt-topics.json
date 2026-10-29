@@ -21,6 +21,7 @@
                  "fields": ["at", "cpu_pct", "cpu_count", "load[3]", "mem{total,used,pct}", "swap{total,used,pct}", "disk_io{dev:{read_bps,write_bps,busy_pct}}", "net_io{nic:{rx_bps,tx_bps}}", "hwmon_max_c{chip:c}", "uptime_s"]}
   },
   "commands": {
+    "deprecated": "2026-10-29 owner: no new users; fan override + GPU limit go through :8090, other agent commands through contracts/agent-api.md. Removed in topic contract v2.",
     "request_topic": "<prefix>/<host>/cmd/<name>",
     "result_topic": "<prefix>/<host>/result/<id>",
     "qos": 1,

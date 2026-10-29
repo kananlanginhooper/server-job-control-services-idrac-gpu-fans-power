@@ -93,20 +93,27 @@ def test_commands_at_most_once_and_three_result_kinds(api):
     assert call(api, "POST", f"/servers/hosta/commands/{a}/result", {"ok": True})[0] == 409  # already finished
 
 
-def test_hardware_commands_expire_after_30_s(api):
-    fan = api.enqueue("hosta", "fan.override", {"pct": 60, "minutes": 5})
-    other = api.enqueue("hosta", "task.restart", {"name": "t1"})
-    assert api.commands[fan]["expires_at"] - api.commands[fan]["queued_at"] == 30
-    api.skew = 31  # the container's clock moves on before the agent claims
+def test_commands_expire_after_10_min(api):
+    old = api.enqueue("hosta", "task.restart", {"name": "t1"})
+    assert api.commands[old]["expires_at"] - api.commands[old]["queued_at"] == 600
+    api.skew = 601  # the container's clock moves on before the agent claims
+    new = api.enqueue("hosta", "task.run_now", {"name": "t1"})
     got = call(api, "GET", "/servers/hosta/commands?wait=0")[1]
-    assert [x["id"] for x in got] == [other] and api.commands[fan]["state"] == "expired"  # a stale fan command never runs
+    assert [x["id"] for x in got] == [new] and api.commands[old]["state"] == "expired"  # never runs late
 
 
 def test_late_result_after_expiry_is_409(api):
-    g = api.enqueue("hosta", "gpu.limit", {"watts": 200, "minutes": 5})
+    c = api.enqueue("hosta", "unit.restart", {"unit": "x"})
     call(api, "GET", "/servers/hosta/commands?wait=0")
-    api.skew = 31
-    assert call(api, "POST", f"/servers/hosta/commands/{g}/result", {"ok": True})[0] == 409
+    api.skew = 601
+    assert call(api, "POST", f"/servers/hosta/commands/{c}/result", {"ok": True})[0] == 409
+
+
+def test_no_hardware_commands_on_this_path(api):
+    """v2 (owner): fan override and the GPU power limit go through :8090, never container -> agent."""
+    for cmd in ("fan.override", "gpu.limit"):
+        with pytest.raises(ValueError):
+            api.enqueue("hosta", cmd, {})
 
 
 def test_commands_long_poll(api):

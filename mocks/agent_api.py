@@ -1,4 +1,4 @@
-"""Mock of the control container's agent API (contract: contracts/agent-api.md, v1), stdlib only.
+"""Mock of the control container's agent API (contract: contracts/agent-api.md, v2), stdlib only.
 
 The reference both sides test against: the per-server agent (this repo) and the container (Recovery's hub/).
   GET  /api/v1/agent/servers/{host}/orders?version=N&wait=S     200 orders | 304 empty body
@@ -23,8 +23,8 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-HW_COMMANDS = {"fan.override", "gpu.limit"}
-HW_EXPIRY_S, OTHER_EXPIRY_S, MAX_WAIT_S = 30, 600, 25
+COMMANDS = {"task.restart", "task.run_now", "unit.restart", "agent.resync"}  # v2: no hardware commands
+EXPIRY_S, MAX_WAIT_S = 600, 25
 
 
 def sha256(s: str) -> str:
@@ -149,12 +149,14 @@ class MockAgentAPI:
                 self.cv.wait(left)
 
     def enqueue(self, host: str, cmd: str, args: dict | None = None, by: str = "test") -> str:
+        if cmd not in COMMANDS:
+            raise ValueError(f"not an agent command (v2): {cmd}")
         with self.cv:
             cid = f"c{next(self._ids)}"
             t = self.now()
             self.commands[cid] = {
                 "id": cid, "host": host, "cmd": cmd, "args": args or {}, "by": by, "queued_at": t,
-                "expires_at": t + (HW_EXPIRY_S if cmd in HW_COMMANDS else OTHER_EXPIRY_S), "state": "queued", "result": None,
+                "expires_at": t + EXPIRY_S, "state": "queued", "result": None,
             }  # fmt: skip
             self.cv.notify_all()
             return cid

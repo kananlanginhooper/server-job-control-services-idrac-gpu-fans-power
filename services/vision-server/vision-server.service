@@ -6,8 +6,9 @@ After=network-online.target
 User=@USER@
 # needs a venv with torch/open_clip/onnxruntime; VISION_PYTHON in the repo .env points at its python
 ExecStart=/bin/bash -c '. @REPO@/lib/svcenv.sh; export HF_HOME=$(svc_env VISION_BASE)/hf; exec $(svc_env VISION_PYTHON python3) @REPO@/services/vision-server/vision_server.py'
-Restart=always
-RestartSec=10
+# on-failure, not always: a deliberate stop must leave it stopped
+Restart=on-failure
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

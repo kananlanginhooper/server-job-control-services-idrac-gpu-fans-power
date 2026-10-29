@@ -1,6 +1,6 @@
 [Unit]
 Description=Per-minute GPU performance table (gpu_perf) from the GPU server's agent
-After=network-online.target
+After=network-online.target mysql.service
 Wants=network-online.target
 
 [Service]

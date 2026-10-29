@@ -5,8 +5,11 @@ After=basic.target
 
 [Service]
 ExecStart=/usr/bin/python3 @REPO@/services/fan-control/fan-control.py
+# safety net: hand the fans back to the BMC's own (Dell auto) control however the controller stops, a crash or kill included
+# (a clean stop does this itself; IPMITOOL_CMD comes from the shared .env)
+ExecStopPost=/bin/bash -c '. @REPO@/lib/svcenv.sh; exec $(svc_env IPMITOOL_CMD ipmitool) raw 0x30 0x30 0x01 0x01'
 Restart=always
-RestartSec=5
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

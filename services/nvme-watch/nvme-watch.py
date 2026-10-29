@@ -78,7 +78,7 @@ def main():
                 log(f"{name} {d['model']} {d['serial']}: {summary}; " + ("; ".join(problems) if problems else "ok"))
             prev[name] = problems
             post({"id": f"nvme-watch/{name}", "title": f"NVMe watch {name} ({d['model']})", "group": "Drive health",
-                  "host": HOST_KEY, "owner": "nvme-watch", "heartbeat_s": 120,
+                  "host": HOST_KEY, "owner": "recovery", "heartbeat_s": 120,
                   "state": "failed" if problems else "running", "phase": "watching",
                   "message": summary, "error": "; ".join(problems) if problems else None})
         with open(STATE + ".tmp", "w") as f:

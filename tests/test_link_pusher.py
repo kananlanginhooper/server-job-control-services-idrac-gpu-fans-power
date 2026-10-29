@@ -43,9 +43,11 @@ def test_walk_skips_unpublished(lp, tmp_path):
 
 
 def test_fs_type_longest_prefix(lp):
-    mounts = ("/dev/sda2 / ext4 rw 0 0\n"
-              "nas:/export/link/gpusrv-hub /link/gpusrv-hub nfs4 rw 0 0\n"
-              "/dev/sda1 /link/gpusrv-gpusrv0 xfs rw 0 0\n")
+    mounts = (
+        "/dev/sda2 / ext4 rw 0 0\n"
+        "nas:/export/link/gpusrv-hub /link/gpusrv-hub nfs4 rw 0 0\n"
+        "/dev/sda1 /link/gpusrv-gpusrv0 xfs rw 0 0\n"
+    )
     assert lp.fs_type("/link/gpusrv-hub", mounts) == "nfs4"
     assert lp.fs_type("/link/gpusrv-hub/sub/f", mounts) == "nfs4"
     assert lp.fs_type("/link/hub-desk", mounts) == "ext4"
@@ -99,6 +101,7 @@ def test_status_file(lp, tmp_path, monkeypatch):
     os.makedirs(tmp_path / f"desk-{lp.SELF}")
     lp.write_status([ob])
     import json
+
     st = json.load(open(lp.STATUS_FILE))
     assert st["outboxes"][ob.name]["files"] == 1 and st["outboxes"][ob.name]["bytes"] == 5
     assert f"desk-{lp.SELF}" in st["inboxes"]

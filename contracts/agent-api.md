@@ -226,19 +226,44 @@ DESK_GPUS={"desk-gpu0": {"ollama": ["http://127.0.0.1:11434", "http://127.0.0.1:
 
 `GET /api/v1/gpus` (holds plus reported state), `POST /api/v1/gpus/{gpu}/hold {reason}` and `POST /api/v1/gpus/{gpu}/release`. LAN only; `by` = the caller (the login, once the IdP is in). Stored in `server_job_control_orders`.
 
+`GET /api/v1/gpus` returns a list with one entry per GPU that any host reports:
+
+```json
+[{"gpu": "desk-gpu0", "host": "desk", "hold": "held", "phase": "free",
+  "holds": [{"origin": "lock", "by": "owner", "since": 1793300000.0, "reason": "offline run", "lock": "<lock name>", "releasable": false}],
+  "blockers": [], "idle": false, "foreign": [], "mem_used_mb": 310, "reported_at": 1793300100.0}]
+```
+
+- `hold` is the owning host's reported state (10.6), and `phase` is the container's own (10.3), or `null` with no hold.
+- `releasable` is `true` only for `origin: "container"`, so the UI needs no origin logic.
+- `POST .../hold` when another origin already holds the GPU returns **200** and adds the container hold (OR).
+- `POST .../release` with no container hold, but other holds left, returns **409** with `{"holds": [...]}`. With no hold at all it returns **404**.
+
 ### 10.8 Exclusive claim and backfill (design, v2.2 draft; not in the mock yet)
 
 The owner's latest requirement is "a defined locking scheme". One process at a time keeps a GPU busy, and queue work only backfills it while it's idle. This builds on 10.1–10.7 and adds nothing parallel to them: **a hold *is* the exclusive claim.** Every hold names an owner (`by`), a `reason` and a `since`, and backfill is just the consumer tasks of 10.2.
 
-- **A third origin: `lock`.** The project's job locks (the lock script on the hub, one directory per job; its `owner` file has `owner:`, `claimed:` and `what:` lines) can name a GPU. The `<HOST>_GPUS` entry gets `"lock": "<lock name>"`. While that lock directory exists, the owning host treats the GPU as held with `origin: "lock"`, `by` = `owner:`, `since` = `claimed:` and `reason` = `what:`. It reports this in `health.gpus[].holds`, and the container relays it like a local hold (10.5). The lock is released only by its own owner through the lock script. A dashboard release never clears it; the container shows "held by lock `<name>` (owner …)".
+- **A third origin: `lock`.** The project's job locks can name a GPU. They are kept by the lock script on the hub, one directory per job, and each has an `owner` file with `owner:`, `claimed:` and `what:` lines.
+  - **Who reads the locks:** the agent on the host that has the lock directory (the hub). The owning host never reads it, so it needs no share or ssh (server independence). That agent reports every lock as `health.locks: [{"name", "owner", "claimed", "what"}]`, with `claimed` as a float epoch. The lock file stores `claimed:` as ISO 8601 with offset (`date -Is`), and the reporting agent converts it, so the container stores floats only.
+  - **Name → GPU:** the owning host's `<HOST>_GPUS` entry gets `"lock": "<lock name>"`, and it reports that in `health.gpus[].lock`. While a reported lock matches, the container puts a hold with `origin: "lock"`, `lock: <name>`, `by` = owner, `since` = claimed and `reason` = what into `settings.gpu_holds` for every host. The owning host then drains and frees as for any hold (10.3).
+  - **Release:** only by the lock's own owner, through the lock script. A dashboard release never clears it; the container shows "held by lock `<name>` (owner …)".
+  - **With the container down:** a lock hold takes effect only on the lock's own host. That host's consumers of the GPU (the desk GPU's VLM tasks run on the hub) treat a matching lock as a local hold. The owning host doesn't learn of it until the container relays it, the same limit as 10.5 in reverse.
 - **Origins combine (OR):** container, local and lock. Any one of them makes the GPU held, and each is cleared only by its own origin.
 - **Backfill start gate (consumers).** A task with the GPU in `needs.gpus` starts an instance only if:
   1. no hold of any origin is present, **and**
   2. the GPU is idle of *foreign* work: VRAM used by processes outside this GPU's map (its listed units, its Ollama instances) is under `GPU_IDLE_MAX_MB` (default 2048), and no Ollama instance of this GPU has a model loaded that none of its consumers asked for. Each consumer task lists its models in `needs.models`.
   This gate is checked by the owning host. It is reported per GPU as `idle: true|false` with a `foreign` list (pids/models), and the container passes it to the consumer hosts in `settings.gpu_idle` with each report. A consumer host with no fresh `gpu_idle` (older than 2 report intervals) does not start new instances; already running ones keep going.
+  - **Expected, not a bug:** when the owning host misses two reports (a Wi-Fi blip on the desk box), the hub's consumers of its GPU stop *starting* instances until reports resume. No GPU in view means no new work.
+  - **While any hold is present,** the owning host reports `idle: false, foreign: []`, so a stale `true` is never relayed. The hold already blocks starts, and `foreign` lists only work outside a hold's own claimant.
 - **Yield:** a hold appearing (any origin) puts the consumers in `drain` exactly as in 10.3, within the 90 s budget. Foreign VRAM appearing while consumers run doesn't stop them, because the claim is the contract. A process that needs the GPU takes the claim first.
 - **Who takes a claim:** anything outside the queue that wants the GPU exclusively (a manual job, an offline batch run, the dashboard itself when it's the primary user). It claims through the dashboard (container origin), through `taskctl gpu hold` on the owning host (local), or through a job lock named in the map. It should wait for `hold: "held"` with empty `blockers` before loading its own model.
 - **Not changed:** Low Power / run mode gates (10.2), the GPU switch (core safety), and `enabled`.
+- **Mock/tests (to add with the implementation):**
+  - a lock-origin hold relayed from `health.locks`;
+  - release refused (409) when only lock or local holds are left;
+  - a stale `gpu_idle` blocking starts;
+  - a foreign process making `idle` false;
+  - hold on top of another origin returns 200.
 
 ### 10.9 Dependency (job code, outside this repo)
 

@@ -5,7 +5,7 @@
 - The container repo pins this file by commit and keeps no copy.
 - A runnable reference of the container side is [`mocks/agent_api.py`](../mocks/agent_api.py), with tests in [`tests/test_agent_api.py`](../tests/test_agent_api.py). Both sides test against it.
 - A breaking change bumps the version and is announced to the other side before it's pushed. Fields are added freely, never renamed or removed within a version. Unknown fields are ignored.
-- Agreed 2026-10-29 by both owners (git tag `agent-api-v1`). Nothing implements it on a live server yet; go-lives are the owner's call.
+- Agreed 2026-10-29 by both owners (git tag `agent-api-v1`). Later the same day the owner fixed the core safety layer as permanent (section 1). That clarifies the transition plan only; no endpoint or payload changed, so it is still v1. Nothing implements it on a live server yet; go-lives are the owner's call.
 
 **Direction (owner, 2026-10-29):**
 - ONE control container holds the REST API, the database access and the queue for every server.
@@ -21,6 +21,13 @@
 | Talks | answers HTTP | **pulls** (the container never connects to a server); long-poll keeps commands fast |
 | Hardware | none | everything host-level: systemd, ipmitool/DCMI, RAPL, `nvidia-smi`, jobs |
 
+### The core safety layer (owner, 2026-10-29: permanent)
+
+**power-guard, fan-control and gpu-switch are separate system services on every server where they run, permanently.** So is wherever the run mode and power target live, if not inside one of those three.
+- They are never folded into the task runner or the agent, and they never depend on the control container.
+- power-guard is the safety mechanism, and it sometimes operates fan-control.
+- The agent may *report* their state and *pass* a command to them through their own interfaces (`fan.override`, `gpu.limit`). It never replaces them, and they keep working when the agent or the container is down.
+
 Why pull and not push:
 - Servers behind NAT (Tug) work unchanged.
 - No inbound port is needed on any server.
@@ -34,7 +41,7 @@ Why pull and not push:
   - The container stores only its SHA-256: `AGENT_TOKEN_SHA256_<HOST>` in the container's `.env`.
   - A bad or missing token gets `401`; a valid token used for another server's `{host}` gets `403`.
   - The home-LAN gate applies as well (Tug arrives as a 10.x address; the router is excluded).
-  - Later: OIDC client credentials from the IdP instead of static tokens.
+  - These are per-server pre-shared keys for now. Later the IdP replaces them (refresh tokens); the owner wants the server services and the container both behind the IdP eventually. That will be a v2 of this section.
 - **Clocks:** expiry, lease and order times use **the container's clock only**. Every `at` an agent sends is for information.
 - Times are Unix seconds (float). Bodies are JSON (UTF-8).
 
@@ -74,7 +81,7 @@ Why pull and not push:
   - The agent writes them into its local table in **one transaction**; the runner loop then applies them as it does today.
   - The list is the **complete** managed set: a container-managed row missing from new orders is disabled and then removed.
   - **Server-local rows** (made with `taskctl`, marked `origin='local'`) are never touched by a sync, so hand-made changes still work while the container is down.
-- **Never in the orders:** run mode, power target and the GPU switch. They stay on today's :8090 endpoints (`/api/powertarget`, `/api/runprofile`, `/api/gpu`), read by fan-control, power-guard, gpu-switch and dash-agent. Orders never change them as a side effect. fan-control and power-guard stay their own units.
+- **Never in the orders:** run mode, power target and the GPU switch. They belong to the core safety layer (section 1): they stay on today's :8090 endpoints (`/api/powertarget`, `/api/runprofile`, `/api/gpu`), read by fan-control, power-guard, gpu-switch and dash-agent. Orders never change them, as a side effect or otherwise.
 
 ## 5. Report
 
@@ -142,6 +149,6 @@ Each step is its own branch, tested against the mock. Each host step goes throug
 
 1. The runner gets an orders-sync thread plus `origin` on task rows. Without `AGENT_API_URL` and a token set, it behaves exactly as today.
 2. Reports, then commands.
-3. Fewer units: helper loops that need no early boot (peak-power, imc-bw, nvme-watch, gpu-perf, gpu-switch) become runner tasks, one at a time, each with its own announced window.
-   **fan-control stays its own unit on every server**: it must start at `basic.target` with nothing else running, and it's the temperature safety floor. power-guard stays a unit until the container can take its decision logic.
+3. Fewer units: reporting helper loops that need no early boot (peak-power, imc-bw, nvme-watch, gpu-perf) may become runner tasks, one at a time, each with its own announced window.
+   **Never moved: the core safety layer** (section 1). power-guard, fan-control and gpu-switch stay their own units permanently, and so does wherever the run mode and power target live. fan-control starts at `basic.target` with nothing else running.
 4. dash-agent's state collection moves into the agent's report, and its HTTP :8091 is retired once the container reads reports instead.

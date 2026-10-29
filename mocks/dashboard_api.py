@@ -15,6 +15,7 @@ Every POST is also appended to .posts, so a test can check exactly what a servic
 Run it for a demo or a manual test:   python mocks/dashboard_api.py --port 8090 [--state state.json]
 then point HUB_API_URL at http://127.0.0.1:8090.
 """
+
 import argparse
 import copy
 import json
@@ -29,10 +30,16 @@ def default_state(hub=HUB, srv=SRV):
     now = time.time()
     return {
         "powertarget": {"scale": "up", "mode": "adaptive", "combined_w": 1250, f"{srv}_w": 1000, "gpu_off": False},
-        "state": {"fast": {"power": {"peak_5s": 450.0, "avg": 430.0, "t": now}},
-                  "remote": {"fast": {"power": {"peak_5s": 500.0, "avg": 480.0, "t": now},
-                                      "power_watch": {"pkg_w": {"package-0": 80.0, "package-1": 78.0}},
-                                      "fan_control": {"gpu": {"draw": 180.0}}}}},
+        "state": {
+            "fast": {"power": {"peak_5s": 450.0, "avg": 430.0, "t": now}},
+            "remote": {
+                "fast": {
+                    "power": {"peak_5s": 500.0, "avg": 480.0, "t": now},
+                    "power_watch": {"pkg_w": {"package-0": 80.0, "package-1": 78.0}},
+                    "fan_control": {"gpu": {"draw": 180.0}},
+                }
+            },
+        },
         "powercaps": {srv: {"rapl_package_w": None}},
         "runprofile": {"profile": "adaptive"},
         "quickcool": {"on": False, "meeting": False},
@@ -65,8 +72,9 @@ class MockDashboard:
                 with mock.lock:
                     if path == "/api/throttle":
                         now = time.time()
-                        return self._send({h: dict(v, left_s=round(v["until"] - now)) for h, v in mock.throttles.items()
-                                           if v["until"] > now})
+                        return self._send(
+                            {h: dict(v, left_s=round(v["until"] - now)) for h, v in mock.throttles.items() if v["until"] > now}
+                        )
                     if path == "/api/tasks":
                         return self._send(list(mock.tasks.values()))
                     key = path.removeprefix("/api/") if hasattr(path, "removeprefix") else path[5:]

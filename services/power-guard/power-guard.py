@@ -36,7 +36,9 @@ adjusting the power down in order to maintain the power target ... take full adv
 Runs on the hub: ~/power-guard (systemd power-guard.service, User=<user>).
 Usage: power-guard.py run [--dry-run] | status | clear [<GPU_SERVER_KEY>|<HUB_KEY>|<GPU_THROTTLE_KEY>|all]
 """
+
 import json, os, subprocess, sys, time, urllib.request
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lib"))
 from svcenv import env  # noqa: E402  (shared repo .env; see .env.example)
 
@@ -46,20 +48,26 @@ DIR = os.path.expanduser(env("POWER_GUARD_DIR", HERE))
 CFG, STATE, LOG = (os.path.join(DIR, f) for f in ("power-guard.json", "state.json", "guard.log"))
 API = env("HUB_API_URL", "http://localhost:8090")
 # Host keys as the dashboard names them (its /api/throttle hosts, /api/powertarget "<key>_w"); site values in the env file
-HUB = env("HUB_KEY", "hub")                      # DCMI whole-server cap
-SRV = env("GPU_SERVER_KEY", "gpu-server")         # RAPL package caps
+HUB = env("HUB_KEY", "hub")  # DCMI whole-server cap
+SRV = env("GPU_SERVER_KEY", "gpu-server")  # RAPL package caps
 GPUK = env("GPU_THROTTLE_KEY", "gpu-server-gpu")  # GPU power limit
-GPU_SERVER_SSH = env("GPU_SERVER_SSH", "")        # user@host for the fallback RAPL read; empty = no fallback
+GPU_SERVER_SSH = env("GPU_SERVER_SSH", "")  # user@host for the fallback RAPL read; empty = no fallback
 BY = "Power and Jobs Sizing (power-guard.py)"
-SSH_KEY = os.path.expanduser(env("SSH_KEY", "~/.ssh/id_ed25519"))   # hub -> GPU server (<user>), read-only use: RAPL energy counters
+SSH_KEY = os.path.expanduser(
+    env("SSH_KEY", "~/.ssh/id_ed25519")
+)  # hub -> GPU server (<user>), read-only use: RAPL energy counters
 
 
 def cfg_keys(cfg):
     """Also accept config keys named after the dashboard's host keys (<HUB_KEY>_floor_w, <GPU_SERVER_KEY>_max_pkg_w, ...),
     the older form, so an existing power-guard.json works unchanged."""
     if cfg:
-        for new, old in (("hub_floor_w", f"{HUB}_floor_w"), ("hub_max_w", f"{HUB}_max_w"),
-                         ("srv_floor_pkg_w", f"{SRV}_floor_pkg_w"), ("srv_max_pkg_w", f"{SRV}_max_pkg_w")):
+        for new, old in (
+            ("hub_floor_w", f"{HUB}_floor_w"),
+            ("hub_max_w", f"{HUB}_max_w"),
+            ("srv_floor_pkg_w", f"{SRV}_floor_pkg_w"),
+            ("srv_max_pkg_w", f"{SRV}_max_pkg_w"),
+        ):
             if new not in cfg and old in cfg:
                 cfg[new] = cfg[old]
     return cfg
@@ -87,8 +95,12 @@ def save(st):
 
 
 def api(path, body=None):
-    req = urllib.request.Request(API + path, data=json.dumps(body).encode() if body is not None else None,
-                                 headers={"Content-Type": "application/json"}, method="POST" if body is not None else "GET")
+    req = urllib.request.Request(
+        API + path,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Content-Type": "application/json"},
+        method="POST" if body is not None else "GET",
+    )
     raw = urllib.request.urlopen(req, timeout=8).read()
     try:
         return json.loads(raw)
@@ -104,19 +116,29 @@ def readings():
         raise LookupError(f"dashboard state incomplete ({HUB} or {SRV} power missing); skipping this cycle")
     pk = (rf.get("power_watch") or {}).get("pkg_w") or {}
     pkgs = [v for k, v in pk.items() if k.startswith("package") and isinstance(v, (int, float))]
-    return {"scale": t.get("scale"), "combined_w": t["combined_w"], "srv_w": t[SRV + "_w"],
-            "srv_pkg_w": max(pkgs) if pkgs else None,
-            "comb_peak": l["peak_5s"] + r["peak_5s"], "comb_avg": l["avg"] + r["avg"],
-            "srv_peak": r["peak_5s"], "srv_avg": r["avg"], "hub_peak": l["peak_5s"],
-            "gpu_draw": ((rf.get("fan_control") or {}).get("gpu") or {}).get("draw"),
-            "age": time.time() - min(l.get("t") or 0, r.get("t") or 0)}
+    return {
+        "scale": t.get("scale"),
+        "combined_w": t["combined_w"],
+        "srv_w": t[SRV + "_w"],
+        "srv_pkg_w": max(pkgs) if pkgs else None,
+        "comb_peak": l["peak_5s"] + r["peak_5s"],
+        "comb_avg": l["avg"] + r["avg"],
+        "srv_peak": r["peak_5s"],
+        "srv_avg": r["avg"],
+        "hub_peak": l["peak_5s"],
+        "gpu_draw": ((rf.get("fan_control") or {}).get("gpu") or {}).get("draw"),
+        "age": time.time() - min(l.get("t") or 0, r.get("t") or 0),
+    }
 
 
 def ours():
     """Active throttles set by this thread: GET /api/throttle -> {host: {..., by, until, left_s}}."""
     got = api("/api/throttle")
-    return {h: v for h, v in (got if isinstance(got, dict) else {}).items()
-            if isinstance(v, dict) and "Power and Jobs Sizing" in str(v.get("by", ""))}
+    return {
+        h: v
+        for h, v in (got if isinstance(got, dict) else {}).items()
+        if isinstance(v, dict) and "Power and Jobs Sizing" in str(v.get("by", ""))
+    }
 
 
 def triggers(x, margin):
@@ -142,10 +164,16 @@ def post(host, st, cfg, reason, dry):
 
 def srv_pkg_w():
     """Actual GPU server CPU package watts (max of its packages), from intel-rapl energy over 1 s, via ssh with the hub key."""
-    cmd = ("a=$(sudo -n cat /sys/class/powercap/intel-rapl:[0-9]/energy_uj | tr '\\n' ' '); sleep 1; "
-           "b=$(sudo -n cat /sys/class/powercap/intel-rapl:[0-9]/energy_uj | tr '\\n' ' '); echo \"$a|$b\"")
-    p = subprocess.run(["ssh", "-i", SSH_KEY, "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", GPU_SERVER_SSH, cmd],
-                       capture_output=True, text=True, timeout=15)
+    cmd = (
+        "a=$(sudo -n cat /sys/class/powercap/intel-rapl:[0-9]/energy_uj | tr '\\n' ' '); sleep 1; "
+        "b=$(sudo -n cat /sys/class/powercap/intel-rapl:[0-9]/energy_uj | tr '\\n' ' '); echo \"$a|$b\""
+    )
+    p = subprocess.run(
+        ["ssh", "-i", SSH_KEY, "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", GPU_SERVER_SSH, cmd],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
     a, b = (list(map(int, part.split())) for part in p.stdout.strip().split("|"))
     return max((y - x0) / 1e6 for x0, y in zip(a, b) if y >= x0)
 
@@ -182,12 +210,14 @@ def tighten(cfg, st, x, scope, reason, dry):
             st["cap"][HUB] = want
             post(HUB, st, cfg, reason, dry)
             done.append(f"{HUB} server cap -> {want} W ({HUB} peak {x['hub_peak']:.0f})")
-    gd = x.get("gpu_draw")                               # GPU: below its actual draw so the limit binds; skip an idle GPU
+    gd = x.get("gpu_draw")  # GPU: below its actual draw so the limit binds; skip an idle GPU
+
     # 2026-10-01: one GPU, long jobs -> the GPU is the LAST lever: only once the CPUs are throttled a good share of the
     # way to their floors (average of both, 0 = normal cap, 1 = floor), and with a smaller step than the CPUs
     def frac(h, normal, floor):
         c = st["cap"].get(h)
         return 0.0 if c is None else max(0.0, min(1.0, (normal - c) / max(1, normal - floor)))
+
     cpu_frac = (frac(HUB, cfg["hub_max_w"], cfg["hub_floor_w"]) + frac(SRV, cfg["srv_max_pkg_w"], cfg["srv_floor_pkg_w"])) / 2
     if gd is not None and gd > cfg["gpu_floor_w"] + cfg["gpu_step_w"] and cpu_frac >= cfg.get("gpu_after_cpu_frac", 0.5):
         cur = st["cap"].get(GPUK)
@@ -208,12 +238,14 @@ def loosen(cfg, st, x, dry):
     """One step UP on every active cap (2026-10-01: use the hardware fully). A cap that reaches its normal value is
     cleared instead of re-posted."""
     done = []
-    steps = {HUB: (cfg["step_w"], cfg["hub_max_w"], "server cap", " W"),
-             SRV: (cfg["step_w"] / 2, cfg["srv_max_pkg_w"], "CPU cap", " W/pkg"),
-             GPUK: (cfg["gpu_step_w"], cfg["gpu_max_w"], "cap", " W")}
-    k = cfg.get("up_step_frac", 1.0)                     # up-steps smaller than down-steps (bursty load: avoid see-sawing)
-    steps = {h: (v[0] * (1.0 if h == GPUK else k),) + v[1:] for h, v in steps.items()}   # GPU recovers at full step
-    order = [GPUK] if st["cap"].get(GPUK) is not None else [HUB, SRV]   # GPU back to normal first (2026-10-01)
+    steps = {
+        HUB: (cfg["step_w"], cfg["hub_max_w"], "server cap", " W"),
+        SRV: (cfg["step_w"] / 2, cfg["srv_max_pkg_w"], "CPU cap", " W/pkg"),
+        GPUK: (cfg["gpu_step_w"], cfg["gpu_max_w"], "cap", " W"),
+    }
+    k = cfg.get("up_step_frac", 1.0)  # up-steps smaller than down-steps (bursty load: avoid see-sawing)
+    steps = {h: (v[0] * (1.0 if h == GPUK else k),) + v[1:] for h, v in steps.items()}  # GPU recovers at full step
+    order = [GPUK] if st["cap"].get(GPUK) is not None else [HUB, SRV]  # GPU back to normal first (2026-10-01)
     for h in order:
         stp, mx, what, unit = steps[h]
         cur = st["cap"].get(h)
@@ -224,31 +256,38 @@ def loosen(cfg, st, x, dry):
         if want >= mx:
             if not dry:
                 api("/api/throttle", {"host": h, "clear": True, "by": BY})
-            del st["cap"][h]; st["posted"].pop(h, None)
+            del st["cap"][h]
+            st["posted"].pop(h, None)
             done.append(f"{name} {what} released (back to normal {mx}{unit})")
         else:
             st["cap"][h] = want
             post(h, st, cfg, "stepping back up: under the line", dry)
             done.append(f"{name} {what} -> {want}{unit}")
     if done:
-        log(f"UP {'(dry-run) ' if dry else ''}{'; '.join(done)} (peak {x['comb_peak']:.0f} <= {x['combined_w']}-{cfg['up_margin_w']} "
-            f"for {cfg['up_hold_s']} s)")
+        log(
+            f"UP {'(dry-run) ' if dry else ''}{'; '.join(done)} (peak {x['comb_peak']:.0f} <= {x['combined_w']}-{cfg['up_margin_w']} "
+            f"for {cfg['up_hold_s']} s)"
+        )
     return bool(done)
 
 
 def run(dry):
     cfg = cfg_keys(load(CFG, None)) or sys.exit(f"missing {CFG}")
     st = load(STATE, {})
-    st.setdefault("cap", {}); st.setdefault("posted", {}); st.setdefault("downs", [])
-    log(f"start {'DRY-RUN ' if dry else ''}every {cfg['interval_s']} s, peak margin {cfg['peak_margin_w']} W, "
-        f"step {cfg['step_w']} W per server, floors {SRV} {cfg['srv_floor_pkg_w']} W/pkg {HUB} {cfg['hub_floor_w']} W, hold {cfg['hold_s']} s")
+    st.setdefault("cap", {})
+    st.setdefault("posted", {})
+    st.setdefault("downs", [])
+    log(
+        f"start {'DRY-RUN ' if dry else ''}every {cfg['interval_s']} s, peak margin {cfg['peak_margin_w']} W, "
+        f"step {cfg['step_w']} W per server, floors {SRV} {cfg['srv_floor_pkg_w']} W/pkg {HUB} {cfg['hub_floor_w']} W, hold {cfg['hold_s']} s"
+    )
     last_down = last_ok = last_up = 0.0
     under_since = None
     while True:
         t0 = time.time()
         try:
             cfg = cfg_keys(load(CFG, cfg))
-            if not dry:   # a throttle that vanished (cleared by the sizing pass, or expired) resets our level
+            if not dry:  # a throttle that vanished (cleared by the sizing pass, or expired) resets our level
                 act = ours()
                 for h in list(st["cap"]):
                     if h not in act:
@@ -258,7 +297,7 @@ def run(dry):
             x = readings()
             if x.get("srv_pkg_w"):
                 st["pkg_hist"] = (st.get("pkg_hist", []) + [x["srv_pkg_w"]])[-6:]
-            if cfg.get("test_combined_w"):   # temporary test line (2026-09-29: "temporarily set the power cap at 1000 W to test")
+            if cfg.get("test_combined_w"):  # temporary test line (2026-09-29: "temporarily set the power cap at 1000 W to test")
                 x["combined_w"] = cfg["test_combined_w"]
             if x["age"] > cfg["stale_s"]:
                 log(f"skip: dashboard readings {x['age']:.0f} s old")
@@ -269,21 +308,33 @@ def run(dry):
                     scope = SRV if all(s == SRV for s, _ in trig) else "combined"
                     reason = "; ".join(r for _, r in trig)
                     host = tighten(cfg, st, x, scope, reason, dry)
-                    st["downs"] = (st["downs"] + [{"at": int(t0), "host": host, "cap": dict(st["cap"]),
-                                                   "reason": reason, "dry": dry}])[-300:]
+                    st["downs"] = (
+                        st["downs"] + [{"at": int(t0), "host": host, "cap": dict(st["cap"]), "reason": reason, "dry": dry}]
+                    )[-300:]
                     last_down = t0
-                under = (not trig and x["comb_peak"] <= x["combined_w"] - cfg["up_margin_w"]
-                         and x["srv_peak"] <= x["srv_w"] - cfg["up_margin_w"])
+                under = (
+                    not trig
+                    and x["comb_peak"] <= x["combined_w"] - cfg["up_margin_w"]
+                    and x["srv_peak"] <= x["srv_w"] - cfg["up_margin_w"]
+                )
                 under_since = (under_since or t0) if under else None
-                if (under and st["cap"] and t0 - under_since >= cfg["up_hold_s"] and t0 - last_down >= cfg["up_hold_s"]
-                        and t0 - last_up >= cfg["up_hold_s"]):
+                if (
+                    under
+                    and st["cap"]
+                    and t0 - under_since >= cfg["up_hold_s"]
+                    and t0 - last_down >= cfg["up_hold_s"]
+                    and t0 - last_up >= cfg["up_hold_s"]
+                ):
                     if loosen(cfg, st, x, dry):
-                        last_up = t0; under_since = t0
+                        last_up = t0
+                        under_since = t0
                 if not trig and t0 - last_ok >= 600:
-                    log(f"ok: comb peak {x['comb_peak']:.0f} avg {x['comb_avg']:.0f} / {x['combined_w']}; "
-                        f"{SRV} peak {x['srv_peak']:.0f} avg {x['srv_avg']:.0f} / {x['srv_w']}; caps {st['cap'] or 'none'}")
+                    log(
+                        f"ok: comb peak {x['comb_peak']:.0f} avg {x['comb_avg']:.0f} / {x['combined_w']}; "
+                        f"{SRV} peak {x['srv_peak']:.0f} avg {x['srv_avg']:.0f} / {x['srv_w']}; caps {st['cap'] or 'none'}"
+                    )
                     last_ok = t0
-            for h in list(st["cap"]):   # hold: keep our caps alive until the sizing pass clears them
+            for h in list(st["cap"]):  # hold: keep our caps alive until the sizing pass clears them
                 if t0 - st["posted"].get(h, 0) >= cfg["hold_repost_s"]:
                     post(h, st, cfg, "hold until the sizing pass trims jobs", dry)
             save(st)
@@ -293,15 +344,25 @@ def run(dry):
 
 
 def clear(which):
-    for h in ([SRV, HUB, GPUK] if which == "all" else [which]):
+    for h in [SRV, HUB, GPUK] if which == "all" else [which]:
         api("/api/throttle", {"host": h, "clear": True, "by": BY})
         log(f"CLEAR {h} throttle (sizing pass)")
 
 
 def status():
     st = load(STATE, {})
-    print(json.dumps({"readings": readings(), "throttles": api("/api/throttle"), "guard_caps": st.get("cap"),
-                      "recent_downs": st.get("downs", [])[-10:]}, indent=1, default=str))
+    print(
+        json.dumps(
+            {
+                "readings": readings(),
+                "throttles": api("/api/throttle"),
+                "guard_caps": st.get("cap"),
+                "recent_downs": st.get("downs", [])[-10:],
+            },
+            indent=1,
+            default=str,
+        )
+    )
 
 
 if __name__ == "__main__":

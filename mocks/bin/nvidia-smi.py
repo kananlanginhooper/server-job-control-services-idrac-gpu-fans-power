@@ -5,12 +5,13 @@ Use it wherever a service takes the nvidia-smi command, e.g.  SJC_NVIDIA_SMI="py
 (sjc_hw runs it through a list, so the interpreter prefix works). Writes go to MOCK_NVSMI_LOG if set.
 MOCK_GPU_TEMP sets the temperature (to test Emergency handling).
 """
+
 import os
 import sys
 
 TEMP = os.environ.get("MOCK_GPU_TEMP", "71")
 # the field order sjc_hw.gpu.FIELDS asks for
-ROW = (f"0, Mock GPU 24GB, {TEMP}, 87, 20480, 24564, 65, 301.50, 400.00, 150.00, 450.00, 2610, 54, 3, 16")
+ROW = f"0, Mock GPU 24GB, {TEMP}, 87, 20480, 24564, 65, 301.50, 400.00, 150.00, 450.00, 2610, 54, 3, 16"
 APPS = "4242, ollama, 18000\n"
 
 

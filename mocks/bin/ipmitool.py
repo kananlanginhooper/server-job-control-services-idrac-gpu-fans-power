@@ -5,6 +5,7 @@ Use it wherever a service takes an ipmitool command line, e.g.  SJC_IPMITOOL="py
 or IPMITOOL_CMD="python mocks/bin/ipmitool.py". Writes (raw fan commands, peak reset) go to MOCK_IPMI_LOG if set.
 MOCK_IPMI_TEMP_CPU raises the CPU temperatures (to test Emergency handling).
 """
+
 import os
 import sys
 
@@ -62,7 +63,7 @@ def log_write(args):
 
 def main(argv):
     a = list(argv)
-    while a and a[0] in ("-I", "-H", "-U", "-P", "-S"):   # connection options and the SDR cache: ignored
+    while a and a[0] in ("-I", "-H", "-U", "-P", "-S"):  # connection options and the SDR cache: ignored
         a = a[2:]
     if a[:2] == ["sdr", "type"] and len(a) > 2:
         sys.stdout.write(SDR.get(" ".join(a[2:]).lower(), ""))

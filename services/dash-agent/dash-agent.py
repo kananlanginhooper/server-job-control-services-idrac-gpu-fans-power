@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import ctypes, glob, json, os, re, subprocess, sys, threading, time
+
 sys.path.insert(0, "/dev/shm/pylib")
 try:
     import pymysql
@@ -7,21 +8,29 @@ except ImportError:
     pymysql = None
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lib"))
 from svcenv import env  # noqa: E402  (shared repo .env; see .env.example)
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8091
 NIC = sys.argv[2] if len(sys.argv) > 2 else "all"
-MOUNTS = ["/", "/raid6"]   # 2026-09-30: /32a + /32b rebuilt as RAID 6 (/raid6)
+MOUNTS = ["/", "/raid6"]  # 2026-09-30: /32a + /32b rebuilt as RAID 6 (/raid6)
 DISK_RE = re.compile(r"^(sd[a-z]+|nvme\d+n\d+)$")
-WATCH = {"rsync": r"\brsync\b", "photorec": r"photorec", "ddrescue": r"ddrescue", "zeromap": r"zeromap",
-         "sshfs": r"sshfs", "smbd": r"smbd", "catalog.py": r"catalog\.py"}
+WATCH = {
+    "rsync": r"\brsync\b",
+    "photorec": r"photorec",
+    "ddrescue": r"ddrescue",
+    "zeromap": r"zeromap",
+    "sshfs": r"sshfs",
+    "smbd": r"smbd",
+    "catalog.py": r"catalog\.py",
+}
 LOGS = ["/dev/shm/copy-prior.log"]
 HUB_CNF = "/dev/shm/dash-db.cnf"
-DASH_URL = env("HUB_API_URL", "http://localhost:8090")   # site settings: see .env.example
-HOST_KEY = env("HOST_KEY", "gpu-server")   # this server's key in the dashboard's per-host JSON
-DASH_CLIENT = env("DASH_CLIENT_IP", "127.0.0.1")   # the only address allowed to POST /runprofile
-POWERCAPS = env("AGENT_POWERCAPS", "1") == "1"   # 0 on a host whose caps the dashboard doesn't manage
+DASH_URL = env("HUB_API_URL", "http://localhost:8090")  # site settings: see .env.example
+HOST_KEY = env("HOST_KEY", "gpu-server")  # this server's key in the dashboard's per-host JSON
+DASH_CLIENT = env("DASH_CLIENT_IP", "127.0.0.1")  # the only address allowed to POST /runprofile
+POWERCAPS = env("AGENT_POWERCAPS", "1") == "1"  # 0 on a host whose caps the dashboard doesn't manage
 QC_URL, QC_FILE = DASH_URL + "/api/quickcool", "/dev/shm/quick-cool.json"
 RP_URL, RP_FILE = DASH_URL + "/api/runprofile", "/dev/shm/run-profile.json"
 
@@ -63,7 +72,8 @@ def netbytes():
     rx = tx = 0
     for n in nics():
         b = f"/sys/class/net/{n}/statistics/"
-        rx += int(read(b + "rx_bytes", "0")); tx += int(read(b + "tx_bytes", "0"))
+        rx += int(read(b + "rx_bytes", "0"))
+        tx += int(read(b + "tx_bytes", "0"))
     return rx, tx
 
 
@@ -72,8 +82,11 @@ def nic_info():
     for n in nics():
         if read(f"/sys/class/net/{n}/operstate") == "up":
             b = f"/sys/class/net/{n}/statistics/"
-            out[n] = {"speed_mbit": int(read(f"/sys/class/net/{n}/speed", "0") or 0),
-                      "rx": int(read(b + "rx_bytes", "0")), "tx": int(read(b + "tx_bytes", "0"))}
+            out[n] = {
+                "speed_mbit": int(read(f"/sys/class/net/{n}/speed", "0") or 0),
+                "rx": int(read(b + "rx_bytes", "0")),
+                "tx": int(read(b + "tx_bytes", "0")),
+            }
     return out
 
 
@@ -115,7 +128,9 @@ def gpu_fan_rpm():
             if lib.nvmlInit_v2() or lib.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(h)):
                 return None
             nvml.update(lib=lib, h=h)
-        s = NvFan(); s.version = ctypes.sizeof(NvFan) | (1 << 24); s.fan = 0
+        s = NvFan()
+        s.version = ctypes.sizeof(NvFan) | (1 << 24)
+        s.fan = 0
         return float(s.speed) if nvml["lib"].nvmlDeviceGetFanSpeedRPM(nvml["h"], ctypes.byref(s)) == 0 else None
     except (OSError, AttributeError):
         return None
@@ -132,8 +147,12 @@ def gpu_pcie():
             v = ctypes.c_uint()
             if lib.nvmlDeviceGetPcieThroughput(h, counter, ctypes.byref(v)) == 0:
                 out[key] = v.value * 1024.0
-        for key, fn in (("pcie_gen", "nvmlDeviceGetCurrPcieLinkGeneration"), ("pcie_width", "nvmlDeviceGetCurrPcieLinkWidth"),
-                        ("pcie_gen_max", "nvmlDeviceGetMaxPcieLinkGeneration"), ("pcie_width_max", "nvmlDeviceGetMaxPcieLinkWidth")):
+        for key, fn in (
+            ("pcie_gen", "nvmlDeviceGetCurrPcieLinkGeneration"),
+            ("pcie_width", "nvmlDeviceGetCurrPcieLinkWidth"),
+            ("pcie_gen_max", "nvmlDeviceGetMaxPcieLinkGeneration"),
+            ("pcie_width_max", "nvmlDeviceGetMaxPcieLinkWidth"),
+        ):
             v = ctypes.c_uint()
             if getattr(lib, fn)(h, ctypes.byref(v)) == 0:
                 out[key] = v.value
@@ -156,12 +175,31 @@ def gpu_temp_nvml():
 
 def gpu():
     try:
-        r = subprocess.run(["nvidia-smi", "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,fan.speed,power.draw,power.limit,temperature.gpu.tlimit,utilization.memory",
-                            "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,fan.speed,power.draw,power.limit,temperature.gpu.tlimit,utilization.memory",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         n, t, u, mu, mt, fan, pw, pl, tl, mbw = [x.strip() for x in r.stdout.splitlines()[0].split(",")]
         num = lambda v: float(v) if v.replace(".", "", 1).lstrip("-").isdigit() else None
-        return {"name": n, "temp": float(t), "util": float(u), "mem_used": float(mu) * 1e6, "mem_total": float(mt) * 1e6,
-                "fan_pct": num(fan), "fan_rpm": gpu_fan_rpm(), "power_w": num(pw), "power_limit_w": num(pl), "tlimit_margin": num(tl), "mem_util": num(mbw)} | gpu_pcie()
+        return {
+            "name": n,
+            "temp": float(t),
+            "util": float(u),
+            "mem_used": float(mu) * 1e6,
+            "mem_total": float(mt) * 1e6,
+            "fan_pct": num(fan),
+            "fan_rpm": gpu_fan_rpm(),
+            "power_w": num(pw),
+            "power_limit_w": num(pl),
+            "tlimit_margin": num(tl),
+            "mem_util": num(mbw),
+        } | gpu_pcie()
     except Exception:
         return None
 
@@ -169,7 +207,8 @@ def gpu():
 def edac():
     ce = ue = 0
     for m in glob.glob("/sys/devices/system/edac/mc/mc*"):
-        ce += int(read(m + "/ce_count", "0")); ue += int(read(m + "/ue_count", "0"))
+        ce += int(read(m + "/ce_count", "0"))
+        ue += int(read(m + "/ue_count", "0"))
     return {"ce": ce, "ue": ue}
 
 
@@ -185,34 +224,59 @@ def processes():
         for k, pat in WATCH.items():
             if re.search(pat, f[4]):
                 e = out.setdefault(k, {"count": 0, "cpu": 0.0, "oldest_s": 0, "sample": f[4][:160]})
-                e["count"] += 1; e["cpu"] += float(f[3]); e["oldest_s"] = max(e["oldest_s"], int(f[1])); e["stopped"] = e.get("stopped", 0) + f[2].startswith("T")
+                e["count"] += 1
+                e["cpu"] += float(f[3])
+                e["oldest_s"] = max(e["oldest_s"], int(f[1]))
+                e["stopped"] = e.get("stopped", 0) + f[2].startswith("T")
     return out, dstate
 
 
-KERR = re.compile(r"I/O error|critical medium error|medium error|unrecovered read|exception Emask|failed command|"
-                  r"nvme.*(timeout|reset)|resetting controller|megaraid.*(error|fault)|sense key", re.I)
+KERR = re.compile(
+    r"I/O error|critical medium error|medium error|unrecovered read|exception Emask|failed command|"
+    r"nvme.*(timeout|reset)|resetting controller|megaraid.*(error|fault)|sense key",
+    re.I,
+)
 
 
 def smart_parse(j, host, dev, rc):
     temp = j.get("temperature") or {}
-    d = {"host": host, "dev": dev, "serial": j.get("serial_number"), "rc": rc,
-         "model": j.get("model_name") or " ".join(x for x in (j.get("scsi_vendor"), j.get("scsi_product")) if x),
-         "proto": "NVMe" if "nvme_smart_health_information_log" in j else "SAS" if "scsi_error_counter_log" in j else "ATA",
-         "passed": (j.get("smart_status") or {}).get("passed"), "temp": temp.get("current"), "trip": temp.get("drive_trip"),
-         "hours": (j.get("power_on_time") or {}).get("hours"), "size": (j.get("user_capacity") or {}).get("bytes")}
+    d = {
+        "host": host,
+        "dev": dev,
+        "serial": j.get("serial_number"),
+        "rc": rc,
+        "model": j.get("model_name") or " ".join(x for x in (j.get("scsi_vendor"), j.get("scsi_product")) if x),
+        "proto": "NVMe" if "nvme_smart_health_information_log" in j else "SAS" if "scsi_error_counter_log" in j else "ATA",
+        "passed": (j.get("smart_status") or {}).get("passed"),
+        "temp": temp.get("current"),
+        "trip": temp.get("drive_trip"),
+        "hours": (j.get("power_on_time") or {}).get("hours"),
+        "size": (j.get("user_capacity") or {}).get("bytes"),
+    }
     attrs = {a["id"]: a["raw"]["value"] for a in (j.get("ata_smart_attributes") or {}).get("table", [])}
     if attrs:
-        d.update(realloc=attrs.get(5), pending=attrs.get(197), crc=attrs.get(199),
-                 uncorrect=(attrs.get(187) or 0) + (attrs.get(198) or 0))
+        d.update(
+            realloc=attrs.get(5),
+            pending=attrs.get(197),
+            crc=attrs.get(199),
+            uncorrect=(attrs.get(187) or 0) + (attrs.get(198) or 0),
+        )
     n = j.get("nvme_smart_health_information_log")
     if n:
-        d.update(wear=n.get("percentage_used"), spare=n.get("available_spare"), media=n.get("media_errors"),
-                 crit=n.get("critical_warning"), errlog=n.get("num_err_log_entries"))
+        d.update(
+            wear=n.get("percentage_used"),
+            spare=n.get("available_spare"),
+            media=n.get("media_errors"),
+            crit=n.get("critical_warning"),
+            errlog=n.get("num_err_log_entries"),
+        )
     s = j.get("scsi_error_counter_log")
     if s:
-        d.update(grown=j.get("scsi_grown_defect_list"),
-                 unc=sum((s.get(k) or {}).get("total_uncorrected_errors", 0) for k in ("read", "write", "verify")),
-                 dcorr={k: (s.get(k) or {}).get("errors_corrected_by_eccdelayed", 0) for k in ("read", "write", "verify")})
+        d.update(
+            grown=j.get("scsi_grown_defect_list"),
+            unc=sum((s.get(k) or {}).get("total_uncorrected_errors", 0) for k in ("read", "write", "verify")),
+            dcorr={k: (s.get(k) or {}).get("errors_corrected_by_eccdelayed", 0) for k in ("read", "write", "verify")},
+        )
     return d
 
 
@@ -226,8 +290,12 @@ def smart_run(cmd, host, dev):
 
 def kernel_errors():
     try:
-        r = subprocess.run(["sudo", "-n", "journalctl", "-k", "--since", "-1h", "-o", "cat", "--no-pager"],
-                           capture_output=True, text=True, timeout=30)
+        r = subprocess.run(
+            ["sudo", "-n", "journalctl", "-k", "--since", "-1h", "-o", "cat", "--no-pager"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
     except Exception:
         return None
     out = {}
@@ -251,7 +319,10 @@ def health_loop():
                 ids = sorted({int(m) for m in re.findall(r"-d megaraid,(\d+)", scan)})
             except Exception:
                 pass
-            drives = [smart_run(["sudo", "-n", SMARTCTL, "-j", "-a", "-d", f"megaraid,{i}", "/dev/bus/0"], HOST_KEY, f"bay {i}") for i in ids]
+            drives = [
+                smart_run(["sudo", "-n", SMARTCTL, "-j", "-a", "-d", f"megaraid,{i}", "/dev/bus/0"], HOST_KEY, f"bay {i}")
+                for i in ids
+            ]
             h = {"at": t0, "drives": drives, "kernel": kernel_errors()}
         with lock:
             state["health"] = h
@@ -285,7 +356,7 @@ def ipmi_sensors(prefix):
     return out
 
 
-SERVER_FAN_EVERY = 5   # server fans/temps every 5 s, re-read 0/3/8 s after fan-control changes the set %; GPU fan/temp every 1 s; always the latest reading
+SERVER_FAN_EVERY = 5  # server fans/temps every 5 s, re-read 0/3/8 s after fan-control changes the set %; GPU fan/temp every 1 s; always the latest reading
 
 
 def ipmi_temps(txt):
@@ -347,7 +418,9 @@ def fan_loop(prefix, cache, gpu_fan=None, gpu_temp=None):
                 last_srv = t0
                 if not os.path.exists(cache):
                     subprocess.run(prefix + ["sdr", "dump", cache], capture_output=True, timeout=60)
-                r = subprocess.run(prefix + ["-S", cache, "sdr", "type", "Fan"], capture_output=True, text=True, timeout=10).stdout
+                r = subprocess.run(
+                    prefix + ["-S", cache, "sdr", "type", "Fan"], capture_output=True, text=True, timeout=10
+                ).stdout
                 rpm = {}
                 for line in r.splitlines():
                     f = [x.strip() for x in line.split("|")]
@@ -357,7 +430,9 @@ def fan_loop(prefix, cache, gpu_fan=None, gpu_temp=None):
                 if rpm:
                     srv.append((t0, rpm))
                 psu_now = psu_read(prefix, cache)
-                r = subprocess.run(prefix + ["-S", cache, "sdr", "type", "Temperature"], capture_output=True, text=True, timeout=10).stdout
+                r = subprocess.run(
+                    prefix + ["-S", cache, "sdr", "type", "Temperature"], capture_output=True, text=True, timeout=10
+                ).stdout
                 tl = ipmi_temps(r)
                 if tl:
                     it.append((t0, tl))
@@ -373,9 +448,16 @@ def fan_loop(prefix, cache, gpu_fan=None, gpu_temp=None):
             itemps = [{"name": n, "c": v, "ok": ok} for n, v, ok in it[-1][1]] if it else None
             hwlatest = hw[-1][1] if hw else None
             with lock:
-                state["fanlatest"] = {"at": t0, "fans": fans, "ipmi_temps": itemps, "temps": hwlatest,
-                                      "gpu_rpm": gf[-1][1] if gf else None, "gpu_temp": gt[-1][1] if gt else None,
-                                      "server_every_s": SERVER_FAN_EVERY, "gpu_every_s": 1}
+                state["fanlatest"] = {
+                    "at": t0,
+                    "fans": fans,
+                    "ipmi_temps": itemps,
+                    "temps": hwlatest,
+                    "gpu_rpm": gf[-1][1] if gf else None,
+                    "gpu_temp": gt[-1][1] if gt else None,
+                    "server_every_s": SERVER_FAN_EVERY,
+                    "gpu_every_s": 1,
+                }
                 if isinstance(state.get("ipmi"), dict):
                     if psu_now:
                         state["ipmi"]["psu"] = dict(psu_now, at=t0)
@@ -404,8 +486,6 @@ def ipmi_loop(prefix, check=None):
                     v["temps"] = fm["ipmi_temps"]
             state["ipmi"] = v
         time.sleep(max(5, 30 - (time.time() - t0)))
-
-
 
 
 PW_SAMPLES = {"q": deque(maxlen=330), "gpu": deque(maxlen=330), "started": False}
@@ -438,9 +518,19 @@ def dcmi_power(prefix, gpu_mw=None):
     win = lambda s, qq=q: [w for t, w in qq if now - t <= s]
     g = list(PW_SAMPLES["gpu"])
     gw = lambda s: [w for t, w in g if now - t <= s]
-    return {"t": q[-1][0], "w": q[-1][1], "peak_5s": max(win(5) or [q[-1][1]]), "max": max(win(60) or [q[-1][1]]),
-            "avg": sum(win(60) or [q[-1][1]]) / len(win(60) or [1]), "min": min(win(60) or [q[-1][1]]), "samples_60s": len(win(60)), "max_5m": max(win(300) or [q[-1][1]]),
-            "gpu_w": g[-1][1] if g else None, "gpu_peak_5s": max(gw(5)) if gw(5) else None, "every_s": 1}
+    return {
+        "t": q[-1][0],
+        "w": q[-1][1],
+        "peak_5s": max(win(5) or [q[-1][1]]),
+        "max": max(win(60) or [q[-1][1]]),
+        "avg": sum(win(60) or [q[-1][1]]) / len(win(60) or [1]),
+        "min": min(win(60) or [q[-1][1]]),
+        "samples_60s": len(win(60)),
+        "max_5m": max(win(300) or [q[-1][1]]),
+        "gpu_w": g[-1][1] if g else None,
+        "gpu_peak_5s": max(gw(5)) if gw(5) else None,
+        "every_s": 1,
+    }
 
 
 def gpu_power_mw():
@@ -459,11 +549,30 @@ def dcmi_read(prefix):
         return None
     grab = lambda k: (lambda m: float(m.group(1)) if m else None)(re.search(k + r"[^:]*:\s*([\d.]+)\s*Watts", r))
     w = grab("Instantaneous power reading")
-    return {"t": time.time(), "w": w, "avg": grab("Average power reading"), "min": grab("Minimum during"), "max": grab("Maximum during")} if w is not None else None
+    return (
+        {
+            "t": time.time(),
+            "w": w,
+            "avg": grab("Average power reading"),
+            "min": grab("Minimum during"),
+            "max": grab("Maximum during"),
+        }
+        if w is not None
+        else None
+    )
 
 
 IPMI_PREFIX = ["sudo", "-n", "env", "LD_LIBRARY_PATH=/dev/shm/tools/lib", "/dev/shm/tools/ipmitool"]
-PW = {"last": None, "low_since": None, "prev_stat": None, "prev_thr": None, "thr_hist": deque(maxlen=120), "sel_at": 0, "sel": None, "psu_rating": None}
+PW = {
+    "last": None,
+    "low_since": None,
+    "prev_stat": None,
+    "prev_thr": None,
+    "thr_hist": deque(maxlen=120),
+    "sel_at": 0,
+    "sel": None,
+    "psu_rating": None,
+}
 LOW_MHZ, LOW_SECS, BUSY = 1800, 30, 0.70
 PSU_RE = re.compile(r"power supply|redundan|over.?current|over.?power|power cap|throttl|current|failure", re.I)
 
@@ -488,10 +597,14 @@ def pkg_watts():
     if not zs:
         return None
     if "rapl_rng" not in PW:
-        out = subprocess.run(["sudo", "-n", "cat"] + [z + "/max_energy_range_uj" for z in zs], capture_output=True, text=True, timeout=5).stdout.split()
+        out = subprocess.run(
+            ["sudo", "-n", "cat"] + [z + "/max_energy_range_uj" for z in zs], capture_output=True, text=True, timeout=5
+        ).stdout.split()
         PW["rapl_rng"] = [int(x) for x in out] if len(out) == len(zs) else None
         PW["rapl_names"] = [read(z + "/name") or os.path.basename(z) for z in zs]
-    out = subprocess.run(["sudo", "-n", "cat"] + [z + "/energy_uj" for z in zs], capture_output=True, text=True, timeout=5).stdout.split()
+    out = subprocess.run(
+        ["sudo", "-n", "cat"] + [z + "/energy_uj" for z in zs], capture_output=True, text=True, timeout=5
+    ).stdout.split()
     if len(out) != len(zs) or not PW.get("rapl_rng"):
         return None
     now, vals = time.time(), [int(x) for x in out]
@@ -499,7 +612,9 @@ def pkg_watts():
     if not prev or now - prev[0] < 1:
         return PW.get("pkg_w_last")
     dt = now - prev[0]
-    PW["pkg_w_last"] = {n: round(((v - p) % r) / dt / 1e6, 1) for n, v, p, r in zip(PW["rapl_names"], vals, prev[1], PW["rapl_rng"])}
+    PW["pkg_w_last"] = {
+        n: round(((v - p) % r) / dt / 1e6, 1) for n, v, p, r in zip(PW["rapl_names"], vals, prev[1], PW["rapl_rng"])
+    }
     PW["pkg_w_last"]["window_s"] = round(dt, 1)
     return PW["pkg_w_last"]
 
@@ -512,7 +627,9 @@ def power_watch():
     for _ in range(5):
         for c in busy_ids:
             try:
-                freqs[c] = max(freqs.get(c, 0), int(open(f"/sys/devices/system/cpu/cpu{c}/cpufreq/scaling_cur_freq").read()) / 1000)
+                freqs[c] = max(
+                    freqs.get(c, 0), int(open(f"/sys/devices/system/cpu/cpu{c}/cpufreq/scaling_cur_freq").read()) / 1000
+                )
             except (OSError, ValueError):
                 pass
         time.sleep(0.06)
@@ -532,9 +649,21 @@ def power_watch():
     old = next((v for t, v in PW["thr_hist"] if now - t <= 70), thr)
     gpu_thr = {}
     try:
-        r = subprocess.run(["nvidia-smi", "--query-gpu=clocks_throttle_reasons.hw_slowdown,clocks_throttle_reasons.hw_power_brake_slowdown,"
-                            "clocks_throttle_reasons.hw_thermal_slowdown,clocks_throttle_reasons.sw_thermal_slowdown,clocks.sm",
-                            "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5).stdout.strip().split(",")
+        r = (
+            subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=clocks_throttle_reasons.hw_slowdown,clocks_throttle_reasons.hw_power_brake_slowdown,"
+                    "clocks_throttle_reasons.hw_thermal_slowdown,clocks_throttle_reasons.sw_thermal_slowdown,clocks.sm",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            .stdout.strip()
+            .split(",")
+        )
         keys = ("hw_slowdown", "hw_power_brake", "hw_thermal", "sw_thermal")
         gpu_thr = {k: r[i].strip() == "Active" for i, k in enumerate(keys) if i < len(r)}
         gpu_thr["sm_mhz"] = float(r[4]) if len(r) > 4 and r[4].strip().replace(".", "").isdigit() else None
@@ -547,7 +676,11 @@ def power_watch():
                 fru = subprocess.run(IPMI_PREFIX + ["fru"], capture_output=True, text=True, timeout=60).stdout
                 PW["psu_rating"] = [int(m) for m in re.findall(r"PWR SPLY,(\d+)W", fru)] or []
             sdr = subprocess.run(IPMI_PREFIX + ["sdr", "type", "Power Supply"], capture_output=True, text=True, timeout=20).stdout
-            psus = [{"name": f[0], "status": f[4]} for f in ([x.strip() for x in l.split("|")] for l in sdr.splitlines()) if len(f) >= 5 and f[0] == "Status"]
+            psus = [
+                {"name": f[0], "status": f[4]}
+                for f in ([x.strip() for x in l.split("|")] for l in sdr.splitlines())
+                if len(f) >= 5 and f[0] == "Status"
+            ]
             out = subprocess.run(IPMI_PREFIX + ["sel", "elist"], capture_output=True, text=True, timeout=60).stdout
             info = subprocess.run(IPMI_PREFIX + ["sel", "info"], capture_output=True, text=True, timeout=30).stdout
             ev = []
@@ -570,17 +703,31 @@ def power_watch():
     dc = dcmi_power(IPMI_PREFIX, gpu_power_mw) or {}
     sel = PW["sel"] or {}
     live = {k: v for k, v in ((state.get("ipmi") or {}).get("psu") or {}).items() if isinstance(v, dict)}
-    if live:   # 2026-09-28: a PSU delivering current counts as working even if the iDRAC still latches an old "Failure detected"
+    if live:  # 2026-09-28: a PSU delivering current counts as working even if the iDRAC still latches an old "Failure detected"
         healthy = sum(1 for v in live.values() if (v.get("v") or 0) > 0 and (v.get("a") or 0) > 0)
         flagged = [k for k, v in live.items() if (v.get("a") or 0) > 0 and "failure" in (v.get("status") or "").lower()]
     else:
-        healthy = sum(1 for x in sel.get("psus") or [] if "failure" not in x["status"].lower() and "ac lost" not in x["status"].lower())
+        healthy = sum(
+            1 for x in sel.get("psus") or [] if "failure" not in x["status"].lower() and "ac lost" not in x["status"].lower()
+        )
         flagged = []
     rating = max(PW["psu_rating"] or [0]) or None
-    PW["last"] = {"ts": now, "busy_cpus": len(hot), "median_busy_mhz": med, "low_clock_s": now - PW["low_since"] if PW["low_since"] else 0,
-                  "pkg_throttle_total": thr, "pkg_throttle_delta_60s": thr - old, "gpu_throttle": gpu_thr,
-                  "power": dc, "pkg_w": pkg_watts(), "psu_rating_w": rating, "psu_healthy": healthy, "psu_flagged": flagged, "capacity_w": rating * healthy if rating and healthy else None,
-                  "sel": sel}
+    PW["last"] = {
+        "ts": now,
+        "busy_cpus": len(hot),
+        "median_busy_mhz": med,
+        "low_clock_s": now - PW["low_since"] if PW["low_since"] else 0,
+        "pkg_throttle_total": thr,
+        "pkg_throttle_delta_60s": thr - old,
+        "gpu_throttle": gpu_thr,
+        "power": dc,
+        "pkg_w": pkg_watts(),
+        "psu_rating_w": rating,
+        "psu_healthy": healthy,
+        "psu_flagged": flagged,
+        "capacity_w": rating * healthy if rating and healthy else None,
+        "sel": sel,
+    }
 
 
 def power_watch_loop():
@@ -598,6 +745,7 @@ CAPS = {"applied": None, "error": None}
 
 def powercaps_loop():
     import urllib.request
+
     while True:
         try:
             with urllib.request.urlopen(CAPS_URL, timeout=4) as r:
@@ -615,19 +763,35 @@ def powercaps_loop():
                         subprocess.run(["sudo", "-n", "tee", f], input=str(uw), capture_output=True, text=True, timeout=10)
                         cur = int(open(f).read())
                     got[f"{os.path.basename(z)}/c{c}"] = cur / 1e6
-            CAPS.update(applied={"ts": time.time(), "want_w": want.get("rapl_package_w"), "limits_w": got, "throttle": want.get("throttle")}, error=None)
+            CAPS.update(
+                applied={
+                    "ts": time.time(),
+                    "want_w": want.get("rapl_package_w"),
+                    "limits_w": got,
+                    "throttle": want.get("throttle"),
+                },
+                error=None,
+            )
         except Exception as e:
             CAPS["error"] = str(e)[:160]
-        time.sleep(10)   # 10 s (was 60): power-management throttles are short-lived (2026-09-29)
+        time.sleep(10)  # 10 s (was 60): power-management throttles are short-lived (2026-09-29)
 
 
 def quickcool_loop():
     import urllib.request
+
     while True:
         try:
             with urllib.request.urlopen(QC_URL, timeout=4) as r:
                 d = json.loads(r.read() or b"{}")
-            body = {"on": bool(d.get("on")), "pct": 80, "since": d.get("at"), "ts": time.time(), "by": "dashboard", "meeting": bool(d.get("meeting"))}
+            body = {
+                "on": bool(d.get("on")),
+                "pct": 80,
+                "since": d.get("at"),
+                "ts": time.time(),
+                "by": "dashboard",
+                "meeting": bool(d.get("meeting")),
+            }
             tmp = QC_FILE + ".tmp"
             with open(tmp, "w") as f:
                 json.dump(body, f)
@@ -637,7 +801,7 @@ def quickcool_loop():
         time.sleep(10)
 
 
-HOOK_DIR = "/dev/shm/power-hooks"   # 2026-09-28: jobs register here instead of polling /api/powertarget
+HOOK_DIR = "/dev/shm/power-hooks"  # 2026-09-28: jobs register here instead of polling /api/powertarget
 LOW_PROFILES = ("lowpower", "normal", "daytime")
 
 
@@ -653,8 +817,11 @@ def fire_power_hooks(profile, reason="run profile change"):
         with open(os.path.join(HOOK_DIR, "hooks.log"), "a") as lg:
             for h in sorted(glob.glob(os.path.join(HOOK_DIR, "*"))):
                 if os.path.isfile(h) and os.access(h, os.X_OK) and not h.endswith((".json", ".log", ".tmp")):
-                    lg.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {os.path.basename(h)} {scale} {profile} ({reason})\n"); lg.flush()
-                    subprocess.Popen([h, scale, profile], stdout=lg, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+                    lg.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {os.path.basename(h)} {scale} {profile} ({reason})\n")
+                    lg.flush()
+                    subprocess.Popen(
+                        [h, scale, profile], stdout=lg, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True
+                    )
     except Exception as e:
         print("power hooks:", e, flush=True)
 
@@ -689,6 +856,7 @@ def apply_profile(profile, at):
 
 def runprofile_loop():
     import urllib.request
+
     while True:
         try:
             with urllib.request.urlopen(RP_URL, timeout=4) as r:
@@ -738,14 +906,20 @@ def carve_scan():
         except OSError:
             pass
         try:
-            r["buffer_bytes"] = int(subprocess.run(["du", "-sb", os.path.join(d, "out")], capture_output=True, text=True, timeout=30).stdout.split()[0])
+            r["buffer_bytes"] = int(
+                subprocess.run(["du", "-sb", os.path.join(d, "out")], capture_output=True, text=True, timeout=30).stdout.split()[
+                    0
+                ]
+            )
         except (IndexError, ValueError, subprocess.TimeoutExpired, OSError):
             pass
-        key = (r.get("log_mtime"), )
+        key = (r.get("log_mtime"),)
         c = CARVE["counts"].get(name)
         if c is None or c[0] != key:
             try:
-                n = subprocess.run(["grep", "-c", "-F", "	 ", os.path.join(d, "photorec.log")], capture_output=True, text=True, timeout=120).stdout.strip()
+                n = subprocess.run(
+                    ["grep", "-c", "-F", "	 ", os.path.join(d, "photorec.log")], capture_output=True, text=True, timeout=120
+                ).stdout.strip()
                 CARVE["counts"][name] = c = (key, int(n or 0))
             except (ValueError, subprocess.TimeoutExpired, OSError):
                 pass
@@ -758,7 +932,9 @@ def carve_scan():
         out.append(r)
     devs = {}
     try:
-        for line in subprocess.run(["lsblk", "-b", "-n", "-o", "NAME,SIZE,TYPE,MOUNTPOINT", "-l"], capture_output=True, text=True, timeout=10).stdout.splitlines():
+        for line in subprocess.run(
+            ["lsblk", "-b", "-n", "-o", "NAME,SIZE,TYPE,MOUNTPOINT", "-l"], capture_output=True, text=True, timeout=10
+        ).stdout.splitlines():
             f = line.split()
             if len(f) >= 3 and (f[2] == "disk" or f[0].startswith("carve-") or f[2] == "part"):
                 devs[f[0]] = {"size": int(f[1]), "type": f[2], "mount": f[3] if len(f) > 3 else None}
@@ -782,7 +958,7 @@ def archiver_progress():
     for p in glob.glob("/dev/shm/archiver/work/*.progress"):
         try:
             raw, files = read(p).split()[:2]
-            out[os.path.basename(p)[:-len(".progress")]] = {"raw": int(raw), "files": int(files), "mtime": os.path.getmtime(p)}
+            out[os.path.basename(p)[: -len(".progress")]] = {"raw": int(raw), "files": int(files), "mtime": os.path.getmtime(p)}
         except (ValueError, OSError):
             pass
     return out
@@ -793,7 +969,9 @@ def log_tails():
     for p in LOGS:
         try:
             with open(p, "rb") as f:
-                f.seek(0, 2); size = f.tell(); f.seek(max(0, size - 8192))
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 8192))
                 text = f.read().decode("utf-8", "replace").replace("\r", "\n")
             out[p] = [l for l in text.splitlines() if l.strip()][-6:]
         except OSError:
@@ -809,11 +987,20 @@ def hub_write(host, report):
         return False
     try:
         if hub["conn"] is None:
-            hub["conn"] = pymysql.connect(read_default_file=HUB_CNF, charset="utf8mb4", connect_timeout=5, read_timeout=10,
-                                          write_timeout=10, autocommit=True)
+            hub["conn"] = pymysql.connect(
+                read_default_file=HUB_CNF,
+                charset="utf8mb4",
+                connect_timeout=5,
+                read_timeout=10,
+                write_timeout=10,
+                autocommit=True,
+            )
         c = hub["conn"].cursor()
-        c.execute("insert into host_reports(host, ts, report) values(%s, now(3), %s) "
-                  "on duplicate key update ts = values(ts), report = values(report)", (host, json.dumps(report, default=str)))
+        c.execute(
+            "insert into host_reports(host, ts, report) values(%s, now(3), %s) "
+            "on duplicate key update ts = values(ts), report = values(report)",
+            (host, json.dumps(report, default=str)),
+        )
         return True
     except Exception:
         try:
@@ -840,37 +1027,70 @@ def loop():
                 slow = {"gpu": gpu(), "edac": edac(), "temps": temps()}
                 slow_at = t
             procs, dcount = processes()
-            fast = {"host": os.uname().nodename, "load": [float(x) for x in read("/proc/loadavg").split()[:3]],
-                    "cpu": 1 - (c[1] - pc[1]) / max(1, c[0] - pc[0]), "ncpu": os.cpu_count(),
-                    "mem": {"total": mem["MemTotal"], "avail": mem["MemAvailable"]},
-                    "net": {"rx": rx, "tx": tx, "speed_mbit": sum(v["speed_mbit"] for v in ni.values()), "nics": ni},
-                    "disks": disks, "mounts": mounts(), "procs": procs, "dstate": dcount, "logs": log_tails(), "archiver": archiver_progress(), "drive_health": state["health"], "ipmi": state.get("ipmi"),
-                    "fan_control": (lambda t: json.loads(t) if t else None)(read("/dev/shm/fan-control.json") or read("/run/fan-control.json")),
-                    "gpu_run_mode": (lambda t: json.loads(t) if t else None)(read("/dev/shm/gpu-run-mode.json")),
-                    "quick_cool": (lambda t: json.loads(t) if t else None)(read(QC_FILE)),
-                    "gpu_jobs": [dict(j, _key=re.sub(r"^gpu-job\.?|\.json$", "", os.path.basename(fp)) or "job") for fp in sorted(glob.glob("/dev/shm/gpu-job*.json"))
-                                 for j in [(lambda t: json.loads(t) if t else None)(read(fp))] if isinstance(j, dict)],   # one feed per GPU job (2026-09-28)
-                    "run_profile": (lambda t: json.loads(t) if t else None)(read(RP_FILE)),
-                    "ram_bw": (lambda t: json.loads(t) if t else None)(read("/dev/shm/imc-bw.json")),
-                    "peak_power": (lambda t: json.loads(t) if t else None)(read("/dev/shm/peak-power.json")),   # iDRAC true 30-s peak (peak-power.py)
-                    "carve": CARVE.get("last"),
-                    "power_watch": PW.get("last"),
-                    "power_caps": CAPS,
-                    "power": dcmi_power(["sudo", "-n", "env", "LD_LIBRARY_PATH=/dev/shm/tools/lib", "/dev/shm/tools/ipmitool"], gpu_power_mw) if os.path.exists("/dev/shm/tools/ipmitool") else None,
-                    "uptime_s": float(read("/proc/uptime", "0 0").split()[0]), **slow}
+            fast = {
+                "host": os.uname().nodename,
+                "load": [float(x) for x in read("/proc/loadavg").split()[:3]],
+                "cpu": 1 - (c[1] - pc[1]) / max(1, c[0] - pc[0]),
+                "ncpu": os.cpu_count(),
+                "mem": {"total": mem["MemTotal"], "avail": mem["MemAvailable"]},
+                "net": {"rx": rx, "tx": tx, "speed_mbit": sum(v["speed_mbit"] for v in ni.values()), "nics": ni},
+                "disks": disks,
+                "mounts": mounts(),
+                "procs": procs,
+                "dstate": dcount,
+                "logs": log_tails(),
+                "archiver": archiver_progress(),
+                "drive_health": state["health"],
+                "ipmi": state.get("ipmi"),
+                "fan_control": (lambda t: json.loads(t) if t else None)(
+                    read("/dev/shm/fan-control.json") or read("/run/fan-control.json")
+                ),
+                "gpu_run_mode": (lambda t: json.loads(t) if t else None)(read("/dev/shm/gpu-run-mode.json")),
+                "quick_cool": (lambda t: json.loads(t) if t else None)(read(QC_FILE)),
+                "gpu_jobs": [
+                    dict(j, _key=re.sub(r"^gpu-job\.?|\.json$", "", os.path.basename(fp)) or "job")
+                    for fp in sorted(glob.glob("/dev/shm/gpu-job*.json"))
+                    for j in [(lambda t: json.loads(t) if t else None)(read(fp))]
+                    if isinstance(j, dict)
+                ],  # one feed per GPU job (2026-09-28)
+                "run_profile": (lambda t: json.loads(t) if t else None)(read(RP_FILE)),
+                "ram_bw": (lambda t: json.loads(t) if t else None)(read("/dev/shm/imc-bw.json")),
+                "peak_power": (lambda t: json.loads(t) if t else None)(
+                    read("/dev/shm/peak-power.json")
+                ),  # iDRAC true 30-s peak (peak-power.py)
+                "carve": CARVE.get("last"),
+                "power_watch": PW.get("last"),
+                "power_caps": CAPS,
+                "power": dcmi_power(
+                    ["sudo", "-n", "env", "LD_LIBRARY_PATH=/dev/shm/tools/lib", "/dev/shm/tools/ipmitool"], gpu_power_mw
+                )
+                if os.path.exists("/dev/shm/tools/ipmitool")
+                else None,
+                "uptime_s": float(read("/proc/uptime", "0 0").split()[0]),
+                **slow,
+            }
             fm = state.get("fanlatest") or {}
             if fast.get("gpu") and time.time() - fm.get("at", 0) < 15:
-                fast["gpu"] = dict(fast["gpu"], **{k: fm[f] for k, f in (("fan_rpm", "gpu_rpm"), ("temp", "gpu_temp")) if fm.get(f) is not None})
+                fast["gpu"] = dict(
+                    fast["gpu"], **{k: fm[f] for k, f in (("fan_rpm", "gpu_rpm"), ("temp", "gpu_temp")) if fm.get(f) is not None}
+                )
             if fm.get("temps") and time.time() - fm.get("at", 0) < 15:
                 fast["temps"] = fm["temps"]
-            sample = {"t": t, "rx": rx, "tx": tx, "cpu": fast["cpu"],
-                      "w": sum(v["write"] for v in disks.values()), "r": sum(v["read"] for v in disks.values())}
+            sample = {
+                "t": t,
+                "rx": rx,
+                "tx": tx,
+                "cpu": fast["cpu"],
+                "w": sum(v["write"] for v in disks.values()),
+                "r": sum(v["read"] for v in disks.values()),
+            }
             with lock:
                 state["history"].append(sample)
                 recent = list(state["history"])[-120:]
             fast["db"] = hub_write(HOST_KEY, fast | {"recent": recent})
             with lock:
-                state["fast"] = fast; state["updated"] = t
+                state["fast"] = fast
+                state["updated"] = t
             pc, pd, pn, pt = c, d, n, t
         except Exception as e:
             with lock:
@@ -915,7 +1135,7 @@ if __name__ == "__main__":
     threading.Thread(target=loop, daemon=True).start()
     threading.Thread(target=health_loop, daemon=True).start()
     threading.Thread(target=quickcool_loop, daemon=True).start()
-    try:   # publish the current profile at start, so hooks and jobs never miss a change made while the agent was down
+    try:  # publish the current profile at start, so hooks and jobs never miss a change made while the agent was down
         with open(RP_FILE) as f:
             _p = json.load(f).get("profile") or "adaptive"
         try:
@@ -932,7 +1152,19 @@ if __name__ == "__main__":
     threading.Thread(target=power_watch_loop, daemon=True).start()
     if POWERCAPS:
         threading.Thread(target=powercaps_loop, daemon=True).start()
-    threading.Thread(target=ipmi_loop, args=(["sudo", "-n", "env", "LD_LIBRARY_PATH=/dev/shm/tools/lib", "/dev/shm/tools/ipmitool"],
-                                            "/dev/shm/tools/ipmitool"), daemon=True).start()
-    threading.Thread(target=fan_loop, args=(["sudo", "-n", "env", "LD_LIBRARY_PATH=/dev/shm/tools/lib", "/dev/shm/tools/ipmitool"], "/dev/shm/ipmi-sdr.cache", gpu_fan_rpm, gpu_temp_nvml), daemon=True).start()
+    threading.Thread(
+        target=ipmi_loop,
+        args=(["sudo", "-n", "env", "LD_LIBRARY_PATH=/dev/shm/tools/lib", "/dev/shm/tools/ipmitool"], "/dev/shm/tools/ipmitool"),
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=fan_loop,
+        args=(
+            ["sudo", "-n", "env", "LD_LIBRARY_PATH=/dev/shm/tools/lib", "/dev/shm/tools/ipmitool"],
+            "/dev/shm/ipmi-sdr.cache",
+            gpu_fan_rpm,
+            gpu_temp_nvml,
+        ),
+        daemon=True,
+    ).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

@@ -1,4 +1,5 @@
 """Run a command or read a file on this server, or over ssh when SJC_REMOTE is set (local development)."""
+
 from __future__ import annotations
 
 import json

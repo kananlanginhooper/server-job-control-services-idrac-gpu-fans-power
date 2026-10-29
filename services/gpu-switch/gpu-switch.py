@@ -5,8 +5,14 @@ OFF: Copilot runner held (its HOLD file, tagged "gpu-switch") + graceful stop vi
      the hub image runner waits without marking images). ON: only what this switch did is undone (a HOLD someone else set
      stays), Ollama started again, Copilot resumed through the hook only when the run mode is not scaled down.
 """
-import json, os, subprocess, time, urllib.request
+
+import json
+import os
+import subprocess
 import sys
+import time
+import urllib.request
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lib"))
 from svcenv import env  # noqa: E402  (shared repo .env; see .env.example)
 
@@ -26,7 +32,8 @@ def run(cmd):
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=120).returncode
     except Exception as e:
-        log(f"{cmd}: {e}"); return -1
+        log(f"{cmd}: {e}")
+        return -1
 
 
 def main():
@@ -37,7 +44,8 @@ def main():
             pt = json.load(urllib.request.urlopen(API, timeout=10))
             off = bool(pt.get("gpu_off"))
         except Exception:
-            time.sleep(15); continue          # dashboard unreachable: leave the GPU as it is
+            time.sleep(15)
+            continue  # dashboard unreachable: leave the GPU as it is
         if off != applied:
             if off:
                 if not os.path.exists(HOLD):

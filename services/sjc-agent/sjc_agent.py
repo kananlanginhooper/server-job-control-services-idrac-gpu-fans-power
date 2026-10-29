@@ -16,6 +16,7 @@ Commands: <prefix>/<host>/cmd/<name> with {"id": "...", ...}; the reply goes to 
 Fan and GPU commands are refused while fan-control is running: it owns them. When the agent does hold manual fan
 control, it hands back to Dell auto when the lease runs out or any sensor reaches its Emergency temperature.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,7 +34,7 @@ log = logging.getLogger("sjc-agent")
 BASE = f"{S.prefix}/{S.host}"
 latest: dict = {"idrac": {}, "gpu": None}
 power_q: deque = deque(maxlen=int(300 / max(S.power_every_s, 0.2)) + 5)
-manual = {"pct": None, "until": 0.0, "by": None, "released": None}   # the agent's own manual fan hold
+manual = {"pct": None, "until": 0.0, "by": None, "released": None}  # the agent's own manual fan hold
 lock = threading.Lock()
 
 
@@ -47,8 +48,16 @@ def power_stats() -> dict | None:
         return None
     now = time.time()
     win = lambda s: [w for t, w in q if now - t <= s] or [q[-1][1]]
-    return {"t": q[-1][0], "w": q[-1][1], "peak_5s": max(win(5)), "max_60s": max(win(60)), "avg_60s": sum(win(60)) / len(win(60)),
-            "min_60s": min(win(60)), "max_5m": max(win(300)), "every_s": S.power_every_s}
+    return {
+        "t": q[-1][0],
+        "w": q[-1][1],
+        "peak_5s": max(win(5)),
+        "max_60s": max(win(60)),
+        "avg_60s": sum(win(60)) / len(win(60)),
+        "min_60s": min(win(60)),
+        "max_5m": max(win(300)),
+        "every_s": S.power_every_s,
+    }
 
 
 def release_manual(why: str) -> None:
@@ -83,6 +92,7 @@ def loop(every: float, fn) -> None:
             except Exception:
                 log.exception("%s failed", fn.__name__)
             time.sleep(max(0.1, every - (time.time() - t0)))
+
     threading.Thread(target=run, name=fn.__name__, daemon=True).start()
 
 
@@ -129,8 +139,16 @@ def main() -> None:
 
     def safety_pub():
         guard_tick()
-        pub(client, "safety", {"at": time.time(), "fan_control": safety.fan_control(), "emergency_c": safety.emergency_limits(),
-                               "manual": dict(manual)})
+        pub(
+            client,
+            "safety",
+            {
+                "at": time.time(),
+                "fan_control": safety.fan_control(),
+                "emergency_c": safety.emergency_limits(),
+                "manual": dict(manual),
+            },
+        )
         pub(client, "runlevel", {"at": time.time()} | safety.runlevel())
 
     def system_pub():

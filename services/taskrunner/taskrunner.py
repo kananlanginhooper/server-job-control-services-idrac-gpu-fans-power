@@ -15,8 +15,17 @@
 # Processes are started in their own process group (TASK_NAME / TASK_INSTANCE in the environment) and stopped with SIGTERM,
 # then SIGKILL after `stop_secs`. Logs: <LOG_DIR>/<task>.<instance>.log, trimmed at 50 MB (one .1 kept).
 # Read-only status: http://<host>:8098/  (JSON: tasks + live processes). Changes go through the table (taskctl).
-import json, os, signal, socket, subprocess, sys, threading, time, urllib.request
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 import psycopg
 
 HOST = socket.gethostname()
@@ -67,6 +76,7 @@ def log(msg):
 
 class Need:
     """Need checks run in a background thread; the main loop only reads the last result (a hung NFS path can't stall it)."""
+
     def __init__(self):
         self.ok, self.why, self.lock, self.wanted = {}, {}, threading.Lock(), {}
         threading.Thread(target=self.loop, daemon=True).start()
@@ -99,7 +109,7 @@ class Need:
         try:
             return json.load(urllib.request.urlopen(POWER_URL, timeout=5)).get("scale") == "down"
         except Exception:
-            return False                          # power API unreachable: don't hold work back (the guard still trims)
+            return False  # power API unreachable: don't hold work back (the guard still trims)
 
     def loop(self):
         while True:
@@ -110,11 +120,13 @@ class Need:
                 why = None
                 for p in n.get("paths") or []:
                     if not self.path_ok(p):
-                        why = f"waiting for {p}"; break
+                        why = f"waiting for {p}"
+                        break
                 if not why:
                     for u in n.get("http") or []:
                         if not self.http_ok(u):
-                            why = f"waiting for {u}"; break
+                            why = f"waiting for {u}"
+                            break
                 if not why and n.get("gpu"):
                     lp = self.low_power() if lp is None else lp
                     if lp:
@@ -133,12 +145,12 @@ class Runner:
     def __init__(self):
         os.makedirs(LOG_DIR, exist_ok=True)
         self.db = None
-        self.procs = {}                  # (task, inst) -> Proc
-        self.backoff = {}                # (task, inst) -> (next_start_at, delay)
-        self.last_sched = {}             # task -> last start time (schedule)
+        self.procs = {}  # (task, inst) -> Proc
+        self.backoff = {}  # (task, inst) -> (next_start_at, delay)
+        self.last_sched = {}  # task -> last start time (schedule)
         self.tasks = {}
         self.need = Need()
-        self.state = {}                  # (task, inst) -> short text for the status page
+        self.state = {}  # (task, inst) -> short text for the status page
 
     # ---------- database ----------
     def conn(self):
@@ -158,12 +170,34 @@ class Runner:
             return None
 
     def load(self):
-        rows = self.q("select name, command, workdir, env, kind, instances, every_secs, needs, nice, stop_secs, enabled, "
-                      "extract(epoch from updated_at) from tasks")
+        rows = self.q(
+            "select name, command, workdir, env, kind, instances, every_secs, needs, nice, stop_secs, enabled, "
+            "extract(epoch from updated_at) from tasks"
+        )
         if rows is None:
-            return False                 # keep running what we have; retry next tick
-        self.tasks = {r[0]: dict(zip(("name", "command", "workdir", "env", "kind", "instances", "every_secs", "needs", "nice",
-                                      "stop_secs", "enabled", "updated"), r)) for r in rows}
+            return False  # keep running what we have; retry next tick
+        self.tasks = {
+            r[0]: dict(
+                zip(
+                    (
+                        "name",
+                        "command",
+                        "workdir",
+                        "env",
+                        "kind",
+                        "instances",
+                        "every_secs",
+                        "needs",
+                        "nice",
+                        "stop_secs",
+                        "enabled",
+                        "updated",
+                    ),
+                    r,
+                )
+            )
+            for r in rows
+        }
         for t in self.tasks.values():
             self.need.want(t["name"], t["needs"] or {})
         return True
@@ -179,11 +213,20 @@ class Runner:
             pass
         env = dict(os.environ, TASK_NAME=t["name"], TASK_INSTANCE=str(inst), **{k: str(v) for k, v in (t["env"] or {}).items()})
         out = open(path, "ab")
-        out.write(f"\n==== {time.strftime('%F %T')} start {t['name']}.{inst} on {HOST}\n".encode()); out.flush()
+        out.write(f"\n==== {time.strftime('%F %T')} start {t['name']}.{inst} on {HOST}\n".encode())
+        out.flush()
         nice = t["nice"] or 0
         try:
-            p = subprocess.Popen(["/bin/bash", "-c", t["command"]], cwd=t["workdir"] or None, env=env, stdout=out, stderr=out,
-                                 stdin=subprocess.DEVNULL, start_new_session=True, preexec_fn=lambda: os.nice(nice))
+            p = subprocess.Popen(
+                ["/bin/bash", "-c", t["command"]],
+                cwd=t["workdir"] or None,
+                env=env,
+                stdout=out,
+                stderr=out,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                preexec_fn=lambda: os.nice(nice),
+            )
         except OSError as e:
             log(f"{t['name']}.{inst}: cannot start: {e}")
             self.fail(key)
@@ -231,15 +274,17 @@ class Runner:
                 log(f"{pr.task}.{pr.inst} exited {rc}; restart back-off")
                 self.fail(key)
             if t.get("kind") == "oneshot" and rc == 0:
-                self.q("update tasks set enabled=false where name=%s and extract(epoch from updated_at) <= %s",
-                       (pr.task, t.get("updated", 0)))
+                self.q(
+                    "update tasks set enabled=false where name=%s and extract(epoch from updated_at) <= %s",
+                    (pr.task, t.get("updated", 0)),
+                )
 
     def tick(self):
         self.reap()
         if not self.load():
             return
         now = time.time()
-        for key, pr in list(self.procs.items()):          # stop what is no longer wanted
+        for _key, pr in list(self.procs.items()):  # stop what is no longer wanted
             t = self.tasks.get(pr.task)
             if not t or not t["enabled"] or pr.inst >= t["instances"]:
                 self.stop(pr, "disabled or fewer instances")
@@ -253,13 +298,17 @@ class Runner:
             for inst in range(n):
                 key = (t["name"], inst)
                 if key in self.procs:
-                    self.state[key] = "running"; continue
+                    self.state[key] = "running"
+                    continue
                 if not ok:
-                    self.state[key] = why; continue
+                    self.state[key] = why
+                    continue
                 if now < self.backoff.get(key, (0, 0))[0]:
-                    self.state[key] = f"restart in {int(self.backoff[key][0] - now)} s"; continue
+                    self.state[key] = f"restart in {int(self.backoff[key][0] - now)} s"
+                    continue
                 if t["kind"] == "schedule" and now - self.last_sched.get(t["name"], 0) < (t["every_secs"] or 3600):
-                    self.state[key] = "scheduled"; continue
+                    self.state[key] = "scheduled"
+                    continue
                 self.start(t, inst)
         for key in list(self.state):
             t = self.tasks.get(key[0])
@@ -267,11 +316,21 @@ class Runner:
                 self.state.pop(key, None)
 
     def status(self):
-        return {"host": HOST, "at": int(time.time()),
-                "tasks": [{"name": t["name"], "kind": t["kind"], "enabled": t["enabled"], "instances": t["instances"],
-                           "running": sum(1 for k in self.procs if k[0] == t["name"]),
-                           "state": {str(k[1]): v for k, v in sorted(self.state.items()) if k[0] == t["name"]}}
-                          for t in sorted(self.tasks.values(), key=lambda x: x["name"])]}
+        return {
+            "host": HOST,
+            "at": int(time.time()),
+            "tasks": [
+                {
+                    "name": t["name"],
+                    "kind": t["kind"],
+                    "enabled": t["enabled"],
+                    "instances": t["instances"],
+                    "running": sum(1 for k in self.procs if k[0] == t["name"]),
+                    "state": {str(k[1]): v for k, v in sorted(self.state.items()) if k[0] == t["name"]},
+                }
+                for t in sorted(self.tasks.values(), key=lambda x: x["name"])
+            ],
+        }
 
     def shutdown(self, *_):
         log("shutting down: stopping every task")
@@ -279,7 +338,8 @@ class Runner:
             self.stop(pr, "runner stopping")
         end = time.time() + 30
         while self.procs and time.time() < end:
-            self.reap(); time.sleep(1)
+            self.reap()
+            time.sleep(1)
         for pr in self.procs.values():
             try:
                 os.killpg(pr.p.pid, signal.SIGKILL)
@@ -295,8 +355,12 @@ def serve(runner):
 
         def do_GET(self):
             b = json.dumps(runner.status()).encode()
-            self.send_response(200); self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
 
 
@@ -308,6 +372,6 @@ if __name__ == "__main__":
     while True:
         try:
             r.tick()
-        except Exception as e:                      # never die on one bad row; log and carry on
+        except Exception as e:  # never die on one bad row; log and carry on
             log(f"tick error: {type(e).__name__}: {e}")
         time.sleep(TICK)

@@ -5,6 +5,7 @@ The power scaler scales power caps down (and back up) to hold the combined power
 This module reads their state files and never writes them. The agent's own manual-control guard lives in
 agent/sjc_agent.py and uses emergency_limits() / over_limit() from here.
 """
+
 from __future__ import annotations
 
 import time
@@ -12,13 +13,38 @@ import time
 from .config import settings
 from .shell import read_json, unit_active
 
-FAN_CONTROL_KEYS = ("ts", "mode", "profile", "fan_pct", "driven_by", "quick_cool", "emergency", "emergency_detail",
-                    "adaptive", "gpu_paused", "gpu_case_floor", "cpus", "nvme", "drives", "raid", "exhaust", "gpus")
+FAN_CONTROL_KEYS = (
+    "ts",
+    "mode",
+    "profile",
+    "fan_pct",
+    "driven_by",
+    "quick_cool",
+    "emergency",
+    "emergency_detail",
+    "adaptive",
+    "gpu_paused",
+    "gpu_case_floor",
+    "cpus",
+    "nvme",
+    "drives",
+    "raid",
+    "exhaust",
+    "gpus",
+)
 
 # fan-control.py's built-in Emergency table, (enter C, clear C): the fallback when the limits file has no value
-EMERGENCY = {"ssd": (70, 63), "nvme": (80, 70), "toshiba": (48, 44), "hdd": (58, 52), "cpu": (90, 80),
-             "exhaust": (50, 45), "gpu": (90, 87), "raid": (97, 95)}
-IDRAC_KIND = {"CPU1": "cpu", "CPU2": "cpu", "Exhaust": "exhaust"}   # iDRAC temperature name -> limits kind (Inlet is info only)
+EMERGENCY = {
+    "ssd": (70, 63),
+    "nvme": (80, 70),
+    "toshiba": (48, 44),
+    "hdd": (58, 52),
+    "cpu": (90, 80),
+    "exhaust": (50, 45),
+    "gpu": (90, 87),
+    "raid": (97, 95),
+}
+IDRAC_KIND = {"CPU1": "cpu", "CPU2": "cpu", "Exhaust": "exhaust"}  # iDRAC temperature name -> limits kind (Inlet is info only)
 
 
 def fan_control(events: int = 30) -> dict:
@@ -89,6 +115,11 @@ def runlevel() -> dict:
     """Run mode as fan-control sees it (run-profile file + the profile it reports) and any power throttle in force."""
     fc = read_json(settings.fan_control_state) or {}
     rp = read_json(settings.run_profile_file) or {}
-    return {"profile_file": rp, "profile_active": fc.get("profile"), "mode": fc.get("mode"),
-            "matches": (rp.get("profile") or "daytime") == fc.get("profile") if fc else None,
-            "throttle": read_json(settings.throttle_file), "scaler": scaler()}
+    return {
+        "profile_file": rp,
+        "profile_active": fc.get("profile"),
+        "mode": fc.get("mode"),
+        "matches": (rp.get("profile") or "daytime") == fc.get("profile") if fc else None,
+        "throttle": read_json(settings.throttle_file),
+        "scaler": scaler(),
+    }

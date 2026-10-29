@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 # RAM bandwidth from the Intel memory-controller (uncore IMC) CAS counters; 1 CAS = 64 bytes.
 # Run as root: sudo -n python3 imc-bw.py <out.json>. Writes {ts, read_bps, write_bps, sockets} every 5 s.
-import ctypes, glob, json, os, re, struct, sys, time
+import ctypes
+import glob
+import json
+import os
+import re
+import struct
+import sys
+import time
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/dev/shm/imc-bw.json"
 EVERY = 5
@@ -50,8 +57,13 @@ def main():
             socks = {}
             for (s, k, v), (_, _, v0) in zip(vals, last):
                 socks.setdefault(s, {"read_bps": 0.0, "write_bps": 0.0})[k + "_bps"] += (v - v0) * 64 / dt
-            body = {"ts": now, "read_bps": sum(x["read_bps"] for x in socks.values()),
-                    "write_bps": sum(x["write_bps"] for x in socks.values()), "sockets": socks, "channels": len(counters) // 2}
+            body = {
+                "ts": now,
+                "read_bps": sum(x["read_bps"] for x in socks.values()),
+                "write_bps": sum(x["write_bps"] for x in socks.values()),
+                "sockets": socks,
+                "channels": len(counters) // 2,
+            }
             with open(OUT + ".tmp", "w") as f:
                 json.dump(body, f)
             os.chmod(OUT + ".tmp", 0o644)

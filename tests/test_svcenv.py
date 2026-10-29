@@ -7,6 +7,7 @@ def load(tmp_path, text, monkeypatch, host="MYHOST"):
     p.write_text(text)
     monkeypatch.setenv("SERVICES_ENV_FILE", str(p))
     import svcenv
+
     m = importlib.reload(svcenv)
     m.HOST = host
     return m
@@ -30,5 +31,6 @@ def test_process_environment_beats_the_file(tmp_path, monkeypatch):
 
 def teardown_module():
     import svcenv
+
     os.environ["SERVICES_ENV_FILE"] = os.path.join(os.path.dirname(__file__), "empty.env")
     importlib.reload(svcenv)

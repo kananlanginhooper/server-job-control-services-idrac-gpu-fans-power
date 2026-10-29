@@ -2,6 +2,7 @@
 
 In a container, the host's /proc is mounted at SJC_HOST_PROC (/host/proc) so the numbers are the server's, not the container's.
 """
+
 from __future__ import annotations
 
 import time
@@ -33,10 +34,16 @@ def _whole_disk(d: str) -> bool:
 def snapshot() -> dict:
     now = time.time()
     vm, sw = psutil.virtual_memory(), psutil.swap_memory()
-    disks = {d: (c.read_bytes, c.write_bytes, getattr(c, "busy_time", 0))
-             for d, c in (psutil.disk_io_counters(perdisk=True) or {}).items() if _whole_disk(d)}
-    nics = {n: (c.bytes_recv, c.bytes_sent) for n, c in psutil.net_io_counters(pernic=True).items()
-            if not n.startswith(("lo", "veth", "docker", "br-"))}
+    disks = {
+        d: (c.read_bytes, c.write_bytes, getattr(c, "busy_time", 0))
+        for d, c in (psutil.disk_io_counters(perdisk=True) or {}).items()
+        if _whole_disk(d)
+    }
+    nics = {
+        n: (c.bytes_recv, c.bytes_sent)
+        for n, c in psutil.net_io_counters(pernic=True).items()
+        if not n.startswith(("lo", "veth", "docker", "br-"))
+    }
     temps = {}
     try:
         for chip, rows in psutil.sensors_temperatures().items():
@@ -53,7 +60,9 @@ def snapshot() -> dict:
         "load": list(psutil.getloadavg()),
         "mem": {"total": vm.total, "used": vm.total - vm.available, "pct": vm.percent},
         "swap": {"total": sw.total, "used": sw.used, "pct": sw.percent},
-        "disk_io": {d: {"read_bps": r[0], "write_bps": r[1], "busy_pct": round(min(100.0, r[2] / 10), 1)} for d, r in disk_rates.items()},
+        "disk_io": {
+            d: {"read_bps": r[0], "write_bps": r[1], "busy_pct": round(min(100.0, r[2] / 10), 1)} for d, r in disk_rates.items()
+        },
         "net_io": {n: {"rx_bps": r[0], "tx_bps": r[1]} for n, r in _rates("net", now, nics).items()},
         "hwmon_max_c": temps,
         "uptime_s": round(now - psutil.boot_time()),

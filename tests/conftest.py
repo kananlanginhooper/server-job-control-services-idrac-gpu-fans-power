@@ -1,4 +1,5 @@
 """Test setup. Automated tests only ever use the mocks: the real .env (live hosts, live control) is never read."""
+
 import os
 import shlex
 import sys
@@ -19,5 +20,5 @@ def mock_cmd(name):
 
 # sjc_hw reads its settings at import time: give it mocks before any test imports it
 os.environ["SJC_IPMITOOL"] = mock_cmd("ipmitool.py")
-os.environ["SJC_NVIDIA_SMI"] = ""          # set per test where a GPU is wanted
+os.environ["SJC_NVIDIA_SMI"] = ""  # set per test where a GPU is wanted
 os.environ["SJC_HOST"] = "test-host"

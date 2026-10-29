@@ -1,4 +1,5 @@
 """sjc_hw readings and the sjc-agent's command safety, against the mock ipmitool / nvidia-smi (no hardware)."""
+
 import importlib.util
 import json
 import os
@@ -7,9 +8,7 @@ import time
 import types
 
 import pytest
-
 from conftest import ROOT, mock_cmd
-
 from sjc_hw import gpu, idrac, safety  # noqa: E402
 from sjc_hw.config import settings as S  # noqa: E402
 
@@ -17,8 +16,10 @@ from sjc_hw.config import settings as S  # noqa: E402
 @pytest.fixture
 def agent(tmp_path, monkeypatch):
     """The agent module with paho stubbed (commands don't touch MQTT), mocks for both tools, a temp fan-control state."""
-    fake = types.ModuleType("paho"); fake.mqtt = types.ModuleType("paho.mqtt")
-    fake.mqtt.client = types.ModuleType("paho.mqtt.client"); fake.mqtt.client.Client = object
+    fake = types.ModuleType("paho")
+    fake.mqtt = types.ModuleType("paho.mqtt")
+    fake.mqtt.client = types.ModuleType("paho.mqtt.client")
+    fake.mqtt.client.Client = object
     for name, mod in (("paho", fake), ("paho.mqtt", fake.mqtt), ("paho.mqtt.client", fake.mqtt.client)):
         monkeypatch.setitem(sys.modules, name, mod)
     log = tmp_path / "ipmi.log"
@@ -60,8 +61,10 @@ def test_no_gpu_tooling_means_none(monkeypatch):
 
 
 def test_emergency_limits_from_the_limits_file(tmp_path, monkeypatch):
-    lim = {"kinds": {"cpu": {"red": 99}, "gpu": {"emergency": [92, 90]}, "inlet": {"fans": False, "red": 30}},
-           "hosts": {"test-host": {"cpu": {"red": 86}}}}
+    lim = {
+        "kinds": {"cpu": {"red": 99}, "gpu": {"emergency": [92, 90]}, "inlet": {"fans": False, "red": 30}},
+        "hosts": {"test-host": {"cpu": {"red": 86}}},
+    }
     (tmp_path / "limits.json").write_text(json.dumps(lim))
     monkeypatch.setattr(S, "limits_file", str(tmp_path / "limits.json"))
     e = safety.emergency_limits()
@@ -75,26 +78,26 @@ def test_fan_command_refused_while_fan_control_runs(agent):
     fan_control_state(tmp, age_s=2)
     r = a.command("fans", {"pct": 40})
     assert r["ok"] is False and "fan-control is running" in r["error"]
-    assert not log.exists()                            # nothing sent to the BMC
+    assert not log.exists()  # nothing sent to the BMC
 
 
 def test_manual_fans_with_a_lease_then_back_to_dell_auto(agent):
     a, log, tmp = agent
-    fan_control_state(tmp, age_s=3600)                 # stale: fan-control is not running
+    fan_control_state(tmp, age_s=3600)  # stale: fan-control is not running
     r = a.command("fans", {"pct": 40, "by": "test"})
     assert r["ok"] and r["pct"] == 40
     assert "raw 0x30 0x30 0x02 0xff 0x28" in log.read_text()
-    a.manual["until"] = time.time() - 1                # lease ran out
+    a.manual["until"] = time.time() - 1  # lease ran out
     a.guard_tick()
     assert a.manual["pct"] is None and a.manual["released"]["why"] == "lease ran out"
-    assert log.read_text().strip().endswith("raw 0x30 0x30 0x01 0x01")   # Dell auto
+    assert log.read_text().strip().endswith("raw 0x30 0x30 0x01 0x01")  # Dell auto
 
 
 def test_fan_percent_range_and_emergency_refusal(agent, monkeypatch):
     a, log, tmp = agent
     fan_control_state(tmp, age_s=3600)
     assert a.command("fans", {"pct": 5})["ok"] is False
-    a.latest["idrac"] = {"temps": [{"name": "CPU1", "c": 95.0, "ok": True}]}   # past the built-in CPU Emergency (90)
+    a.latest["idrac"] = {"temps": [{"name": "CPU1", "c": 95.0, "ok": True}]}  # past the built-in CPU Emergency (90)
     r = a.command("fans", {"pct": 50})
     assert r["ok"] is False and "Emergency" in r["error"]
 

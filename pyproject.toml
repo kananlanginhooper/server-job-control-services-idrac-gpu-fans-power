@@ -1,0 +1,42 @@
+# Tooling only: the services run as plain scripts (systemd units point at them); nothing here is installed.
+[project]
+name = "server-services"
+version = "0.1.0"
+description = "Helper services for a home lab: BMC (iDRAC), GPUs, fans, power"
+requires-python = ">=3.9"
+
+[tool.ruff]
+line-length = 130
+target-version = "py39"
+extend-exclude = ["snapshot-*", "private"]
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle errors, import order, pyupgrade-lite, bugbear
+select = ["F", "E", "W", "I", "B"]
+ignore = [
+    "E501",   # long lines: the formatter handles code; long comments are kept as written
+    "E701", "E702", "E731",   # compact one-liners and lambdas used on purpose in the controllers
+    "E402",   # imports after the sys.path line that loads lib/svcenv
+    "E741", "E401",   # short names like l, and several imports per line: the house style of these scripts
+    "B008", "B904",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The live controllers: format + type hints only, no code edits at all (owner 10-29: no behavior change). Their
+# leftover unused names are listed in docs/refactor/NOTES.md instead of being removed.
+"services/fan-control/*" = ["B", "I", "F841", "F401"]
+"services/power-guard/*" = ["B", "I", "F841", "F401"]
+"services/peak-power/*" = ["B", "I", "F841", "F401"]
+"services/sjc-agent/*" = ["B", "I", "F841", "F401"]
+"services/dash-agent/*" = ["B", "I"]
+
+[tool.ruff.format]
+quote-style = "preserve"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["lib", "services", "mocks"]
+omit = ["*/snapshot-*/*"]

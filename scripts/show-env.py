@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Print what a server will resolve from the shared .env, for every key the services use (secrets masked).
-   usage: python scripts/show-env.py <HOSTNAME>   (e.g. the short hostname of the server you're about to cut over)"""
-import os, re, sys
+usage: python scripts/show-env.py <HOSTNAME>   (e.g. the short hostname of the server you're about to cut over)"""
+
+import os
+import re
+import sys
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 import svcenv  # noqa: E402
@@ -20,7 +24,11 @@ keys.discard("NAME")
 print(f"host {svcenv.HOST}, settings file {svcenv.ENV_FILE}")
 for k in sorted(keys):
     v = svcenv.env(k)
-    src = "host" if svcenv.env(k) is not None and (os.environ.get(f"{svcenv.HOST}_{k}") or svcenv.FILE.get(f"{svcenv.HOST}_{k}")) else "shared"
+    src = (
+        "host"
+        if svcenv.env(k) is not None and (os.environ.get(f"{svcenv.HOST}_{k}") or svcenv.FILE.get(f"{svcenv.HOST}_{k}"))
+        else "shared"
+    )
     if v is not None and re.search(r"PASSWORD|SECRET|TOKEN", k):
         v = "(set)"
     print(f"  {k:24} {'-' if v is None else v}   [{src if v is not None else 'default in code'}]")

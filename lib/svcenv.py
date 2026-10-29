@@ -7,7 +7,10 @@ Lookup order for env("NAME"):
   3. the default given by the caller
 Adding a server is a config change: give it its own <HOST>_ keys where it differs from the shared ones.
 """
-import os, re, socket
+
+import os
+import re
+import socket
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 ENV_FILE = os.environ.get("SERVICES_ENV_FILE", os.path.join(ROOT, ".env"))

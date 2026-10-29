@@ -7,14 +7,27 @@
 #                 Every CLIP embedding is also kept in store/clip-*.npz for /search.
 #   GET  /search?q=dog+on+a+beach&k=50   -> [[hash, score], ...] over every stored embedding (counts/hashes only, no content)
 #   GET  /health
-import base64, glob, io, json, os, struct, threading, time
+import base64
+import glob
+import io
+import json
+import os
+import struct
+import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
-import cv2, numpy as np, onnxruntime as ort, open_clip, torch
-from PIL import Image, ImageFile, ImageOps
+
+import cv2
+import numpy as np
+import onnxruntime as ort
+import open_clip
 import pillow_heif
-import sys
+import torch
+from PIL import Image, ImageFile
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lib"))
 from svcenv import env  # noqa: E402  (shared repo .env; see .env.example)
 
@@ -25,26 +38,75 @@ BASE = env("VISION_BASE", "/opt/server-services/vision-server")
 STORE = f"{BASE}/store"
 CLIP_NAME = "hf-hub:timm/ViT-SO400M-14-SigLIP-384"
 ARC = f"{BASE}/models/w600k_r50.onnx"
-ARC_REF = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366], [41.5493, 92.3655], [70.7299, 92.2041]], np.float32)
-TAGS = {   # tag -> prompt; SigLIP scores each independently (sigmoid), so an image can carry several
-    "people": "a photo of people", "selfie": "a selfie", "group_photo": "a group photo of several people", "baby": "a photo of a baby",
-    "child": "a photo of a child", "dog": "a photo of a dog", "cat": "a photo of a cat", "animal": "a photo of a wild animal or bird",
-    "food": "a photo of food", "drink": "a photo of a drink", "landscape": "a landscape photo of nature", "beach": "a photo of a beach",
-    "mountains": "a photo of mountains", "snow": "a photo of snow", "sunset": "a photo of a sunset", "flowers": "a photo of flowers",
-    "city": "a photo of a city street", "building": "a photo of a building", "indoor_room": "a photo of a room inside a home",
-    "car": "a photo of a car", "motorcycle": "a photo of a motorcycle", "boat": "a photo of a boat", "airplane": "a photo of an airplane",
-    "document": "a scanned document", "receipt": "a photo of a receipt", "handwriting": "a handwritten note",
-    "form": "a filled-in form", "business_card": "a business card", "id_card": "an identity card or driver's license",
-    "phone_screenshot": "a screenshot of a phone screen", "computer_screenshot": "a screenshot of a computer screen",
-    "chat_screenshot": "a screenshot of a text message conversation", "game_screenshot": "a video game screenshot",
-    "product": "a product photo on a white background", "painting": "a painting", "drawing": "a drawing or illustration",
-    "cartoon": "a cartoon", "anime": "anime art", "meme": "a meme with text", "logo": "a logo", "icon": "an app icon",
-    "clipart": "clip art", "chart": "a chart or graph", "map": "a map", "diagram": "a diagram", "birthday": "a birthday party",
-    "wedding": "a wedding", "holiday": "a holiday celebration with decorations", "concert": "a concert", "sports": "people playing sports",
-    "christmas": "a christmas tree", "fireworks": "fireworks", "dashboard_car": "a car dashboard", "whiteboard": "a whiteboard",
-    "electronics": "a computer or electronic device", "clothing": "clothing", "vehicle_interior": "the inside of a car",
-    "pool": "a swimming pool", "restaurant": "a restaurant", "office": "an office", "garden": "a garden or backyard",
-    "night": "a photo taken at night", "text": "an image that is mostly text", "blurry": "a blurry photo", "dark": "a very dark photo",
+ARC_REF = np.array(
+    [[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366], [41.5493, 92.3655], [70.7299, 92.2041]], np.float32
+)
+TAGS = {  # tag -> prompt; SigLIP scores each independently (sigmoid), so an image can carry several
+    "people": "a photo of people",
+    "selfie": "a selfie",
+    "group_photo": "a group photo of several people",
+    "baby": "a photo of a baby",
+    "child": "a photo of a child",
+    "dog": "a photo of a dog",
+    "cat": "a photo of a cat",
+    "animal": "a photo of a wild animal or bird",
+    "food": "a photo of food",
+    "drink": "a photo of a drink",
+    "landscape": "a landscape photo of nature",
+    "beach": "a photo of a beach",
+    "mountains": "a photo of mountains",
+    "snow": "a photo of snow",
+    "sunset": "a photo of a sunset",
+    "flowers": "a photo of flowers",
+    "city": "a photo of a city street",
+    "building": "a photo of a building",
+    "indoor_room": "a photo of a room inside a home",
+    "car": "a photo of a car",
+    "motorcycle": "a photo of a motorcycle",
+    "boat": "a photo of a boat",
+    "airplane": "a photo of an airplane",
+    "document": "a scanned document",
+    "receipt": "a photo of a receipt",
+    "handwriting": "a handwritten note",
+    "form": "a filled-in form",
+    "business_card": "a business card",
+    "id_card": "an identity card or driver's license",
+    "phone_screenshot": "a screenshot of a phone screen",
+    "computer_screenshot": "a screenshot of a computer screen",
+    "chat_screenshot": "a screenshot of a text message conversation",
+    "game_screenshot": "a video game screenshot",
+    "product": "a product photo on a white background",
+    "painting": "a painting",
+    "drawing": "a drawing or illustration",
+    "cartoon": "a cartoon",
+    "anime": "anime art",
+    "meme": "a meme with text",
+    "logo": "a logo",
+    "icon": "an app icon",
+    "clipart": "clip art",
+    "chart": "a chart or graph",
+    "map": "a map",
+    "diagram": "a diagram",
+    "birthday": "a birthday party",
+    "wedding": "a wedding",
+    "holiday": "a holiday celebration with decorations",
+    "concert": "a concert",
+    "sports": "people playing sports",
+    "christmas": "a christmas tree",
+    "fireworks": "fireworks",
+    "dashboard_car": "a car dashboard",
+    "whiteboard": "a whiteboard",
+    "electronics": "a computer or electronic device",
+    "clothing": "clothing",
+    "vehicle_interior": "the inside of a car",
+    "pool": "a swimming pool",
+    "restaurant": "a restaurant",
+    "office": "an office",
+    "garden": "a garden or backyard",
+    "night": "a photo taken at night",
+    "text": "an image that is mostly text",
+    "blurry": "a blurry photo",
+    "dark": "a very dark photo",
 }
 dev = "cuda"
 model, _, preprocess = open_clip.create_model_and_transforms(CLIP_NAME, device=dev, precision="fp16")
@@ -68,14 +130,14 @@ def prep(raw, faces):
         im = Image.open(io.BytesIO(raw))
         full = im.size
         im.draft("RGB", (1024, 1024))
-        im = im.convert("RGB")                      # landmarks are in original pixels; the draft may have shrunk the image
+        im = im.convert("RGB")  # landmarks are in original pixels; the draft may have shrunk the image
         k = im.size[0] / full[0]
         crops = []
         if faces:
             a = np.asarray(im)
             for lm in faces:
                 p = np.array(lm, np.float32).reshape(5, 2) * k
-                eyes, mouth = sorted(p[:2].tolist()), sorted(p[3:].tolist())          # image-left first, as ARC_REF
+                eyes, mouth = sorted(p[:2].tolist()), sorted(p[3:].tolist())  # image-left first, as ARC_REF
                 src = np.array(eyes + [p[2].tolist()] + mouth, np.float32)
                 M, _ = cv2.estimateAffinePartial2D(src, ARC_REF)
                 crops.append(cv2.warpAffine(a, M, (112, 112)) if M is not None else np.zeros((112, 112, 3), np.uint8))
@@ -87,7 +149,8 @@ def prep(raw, faces):
 def embed(header, body):
     items, off, raws = header["items"], 0, []
     for it in items:
-        raws.append(body[off:off + it["len"]]); off += it["len"]
+        raws.append(body[off : off + it["len"]])
+        off += it["len"]
     preps = list(POOL.map(lambda x: prep(*x), [(r, it.get("faces") or []) for r, it in zip(raws, items)]))
     ok = [i for i, p in enumerate(preps) if p[0] is not None]
     out = {it["hash"]: {"err": preps[i][2]} for i, it in enumerate(items)}
@@ -121,9 +184,14 @@ def index():
     if files != _index["files"]:
         hs, es = [], []
         for f in files:
-            z = np.load(f); hs.append(z["hashes"]); es.append(z["emb"])
-        _index.update(files=files, hashes=np.concatenate(hs) if hs else np.array([]),
-                      emb=torch.from_numpy(np.concatenate(es)).to(dev) if es else None)
+            z = np.load(f)
+            hs.append(z["hashes"])
+            es.append(z["emb"])
+        _index.update(
+            files=files,
+            hashes=np.concatenate(hs) if hs else np.array([]),
+            emb=torch.from_numpy(np.concatenate(es)).to(dev) if es else None,
+        )
     return _index["hashes"], _index["emb"]
 
 
@@ -138,7 +206,8 @@ def search(q, k):
         seen, res = set(), []
         for score, j in zip(v.tolist(), i.tolist()):
             if hs[j] not in seen:
-                seen.add(hs[j]); res.append([str(hs[j]), round(score, 4)])
+                seen.add(hs[j])
+                res.append([str(hs[j]), round(score, 4)])
         return res
 
 
@@ -148,8 +217,11 @@ class H(BaseHTTPRequestHandler):
 
     def send(self, obj, code=200):
         b = json.dumps(obj).encode()
-        self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b)))
-        self.end_headers(); self.wfile.write(b)
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -166,7 +238,7 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         n = struct.unpack(">I", body[:4])[0]
         try:
-            self.send(embed(json.loads(body[4:4 + n]), body[4 + n:]))
+            self.send(embed(json.loads(body[4 : 4 + n]), body[4 + n :]))
         except Exception as e:
             self.send({"err": str(e)[:300]}, 500)
 

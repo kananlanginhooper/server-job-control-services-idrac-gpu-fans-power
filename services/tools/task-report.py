@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-import argparse, json, re, sys, urllib.error, urllib.request
+import argparse
+import json
 import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lib"))
 from svcenv import env  # noqa: E402  (shared repo .env; see .env.example)
 

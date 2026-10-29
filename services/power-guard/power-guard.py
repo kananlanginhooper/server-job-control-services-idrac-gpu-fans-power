@@ -41,7 +41,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..
 from svcenv import env  # noqa: E402  (shared repo .env; see .env.example)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CFG, STATE, LOG = (os.path.join(HERE, f) for f in ("power-guard.json", "state.json", "guard.log"))
+# config, state and log live in POWER_GUARD_DIR (default: next to this script); the dashboard's throttle chart reads guard.log
+DIR = os.path.expanduser(env("POWER_GUARD_DIR", HERE))
+CFG, STATE, LOG = (os.path.join(DIR, f) for f in ("power-guard.json", "state.json", "guard.log"))
 API = env("HUB_API_URL", "http://localhost:8090")
 # Host keys as the dashboard names them (its /api/throttle hosts, /api/powertarget "<key>_w"); site values in the env file
 HUB = env("HUB_KEY", "hub")                      # DCMI whole-server cap
@@ -50,6 +52,17 @@ GPUK = env("GPU_THROTTLE_KEY", "gpu-server-gpu")  # GPU power limit
 GPU_SERVER_SSH = env("GPU_SERVER_SSH", "")        # user@host for the fallback RAPL read; empty = no fallback
 BY = "Power and Jobs Sizing (power-guard.py)"
 SSH_KEY = os.path.expanduser(env("SSH_KEY", "~/.ssh/id_ed25519"))   # hub -> GPU server (<user>), read-only use: RAPL energy counters
+
+
+def cfg_keys(cfg):
+    """Also accept config keys named after the dashboard's host keys (<HUB_KEY>_floor_w, <GPU_SERVER_KEY>_max_pkg_w, ...),
+    the older form, so an existing power-guard.json works unchanged."""
+    if cfg:
+        for new, old in (("hub_floor_w", f"{HUB}_floor_w"), ("hub_max_w", f"{HUB}_max_w"),
+                         ("srv_floor_pkg_w", f"{SRV}_floor_pkg_w"), ("srv_max_pkg_w", f"{SRV}_max_pkg_w")):
+            if new not in cfg and old in cfg:
+                cfg[new] = cfg[old]
+    return cfg
 
 
 def log(msg):
@@ -224,7 +237,7 @@ def loosen(cfg, st, x, dry):
 
 
 def run(dry):
-    cfg = load(CFG, None) or sys.exit(f"missing {CFG}")
+    cfg = cfg_keys(load(CFG, None)) or sys.exit(f"missing {CFG}")
     st = load(STATE, {})
     st.setdefault("cap", {}); st.setdefault("posted", {}); st.setdefault("downs", [])
     log(f"start {'DRY-RUN ' if dry else ''}every {cfg['interval_s']} s, peak margin {cfg['peak_margin_w']} W, "
@@ -234,7 +247,7 @@ def run(dry):
     while True:
         t0 = time.time()
         try:
-            cfg = load(CFG, cfg)
+            cfg = cfg_keys(load(CFG, cfg))
             if not dry:   # a throttle that vanished (cleared by the sizing pass, or expired) resets our level
                 act = ours()
                 for h in list(st["cap"]):

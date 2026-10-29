@@ -51,7 +51,7 @@ Deploying is `git pull` in each server's clone, plus copying `.env` next to it. 
 scripts/install-units.sh services/power-guard/power-guard.service
 ```
 
-It installs the unit and reloads systemd, nothing more. Enabling and starting a unit is a separate, deliberate step, because these services drive real fans and power caps.
+It installs the unit (optionally under a live unit's existing name, backing up the file it replaces) and reloads systemd, nothing more. Enabling and starting a unit is a separate, deliberate step, because these services drive real fans and power caps. Moving a server's live services over: [`docs/CUTOVER.md`](docs/CUTOVER.md). Checking a server's settings: `python3 scripts/show-env.py $(hostname)`.
 
 ## Testing
 

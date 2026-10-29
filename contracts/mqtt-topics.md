@@ -33,6 +33,8 @@
 
 ## Commands (backend → one agent) and results
 
+> **Deprecated (2026-10-29, owner's decision):** no new users. Fan override and the GPU power limit go through the :8090 hub as standard operation, and other agent commands go through the REST agent API ([`agent-api.md`](agent-api.md)). MQTT is for live state only. These command topics are removed in topic contract v2.
+
 - Request: publish to `<p>/<h>/cmd/<name>` (QoS 1, not retained) with `{"id": "<unique>", "by": "<who>", ...args}`.
 - Reply: the agent publishes `{"id", "cmd", "at", "ok": true|false, "error"?, ...}` to `<p>/<h>/result/<id>` (QoS 1, not retained). There's no reply when the request has no `id`.
 

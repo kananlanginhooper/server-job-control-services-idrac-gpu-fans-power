@@ -1,0 +1,42 @@
+{
+  "contract": "sjc-mqtt",
+  "version": 1,
+  "doc": "contracts/mqtt-topics.md (the human version; change both together)",
+  "prefix_env": "SJC_MQTT_PREFIX",
+  "prefix_default": "sjc",
+  "host_env": "SJC_HOST",
+  "state": {
+    "status":   {"retain": true, "qos": 1, "payload": "text", "values": ["online", "offline"], "last_will": "offline"},
+    "idrac":    {"retain": true, "qos": 0, "every_env": "SJC_SENSOR_EVERY_S",
+                 "fields": ["at", "fans[name,rpm,ok]", "redundancy", "temps[name,c,ok]", "psu{ps1,ps2}{v,a,status}", "power_w", "error?"]},
+    "power":    {"retain": true, "qos": 0, "every_env": "SJC_SENSOR_EVERY_S", "nullable": true,
+                 "fields": ["t", "w", "peak_5s", "max_60s", "avg_60s", "min_60s", "max_5m", "every_s"]},
+    "gpu":      {"retain": true, "qos": 0, "every_env": "SJC_GPU_EVERY_S", "only_if_env": "SJC_NVIDIA_SMI",
+                 "fields": ["at", "cards?[index,name,temp,util,mem_used,mem_total,fan_pct,power_w,power_limit_w,power_min_w,power_max_w,sm_mhz,mem_util,pcie_gen,pcie_width]"]},
+    "safety":   {"retain": true, "qos": 0, "every_env": "SJC_SAFETY_EVERY_S",
+                 "fields": ["at", "fan_control{...,events,unit,age_s,running,in_emergency}", "emergency_c{kind:c}", "manual{pct,until,by,released}"]},
+    "runlevel": {"retain": true, "qos": 0, "every_env": "SJC_SAFETY_EVERY_S",
+                 "fields": ["at", "profile_file", "profile_active", "mode", "matches", "throttle?", "scaler?{unit,state}"]},
+    "system":   {"retain": true, "qos": 0, "every_env": "SJC_SYSTEM_EVERY_S",
+                 "fields": ["at", "cpu_pct", "cpu_count", "load[3]", "mem{total,used,pct}", "swap{total,used,pct}", "disk_io{dev:{read_bps,write_bps,busy_pct}}", "net_io{nic:{rx_bps,tx_bps}}", "hwmon_max_c{chip:c}", "uptime_s"]}
+  },
+  "commands": {
+    "request_topic": "<prefix>/<host>/cmd/<name>",
+    "result_topic": "<prefix>/<host>/result/<id>",
+    "qos": 1,
+    "retain": false,
+    "request_common": ["id", "by?"],
+    "result_common": ["id", "cmd", "at", "ok", "error?"],
+    "fans": {"args_one_of": [{"pct": "SJC_MANUAL_MIN_PCT..100"}, {"auto": true}], "result": ["pct", "until"], "result_auto": ["mode"],
+             "refused": ["fan-control running", "pct out of range", "a sensor at its Emergency temperature"]},
+    "gpu_limit": {"args": {"w": "card power_min_w..power_max_w", "index": "int, default 0"}, "result": ["index", "w"],
+                  "refused": ["fan-control running", "no such GPU", "w out of range"]}
+  },
+  "safety": {
+    "controller_owns_controls_while_fresh_s_env": "SJC_CONTROLLER_STALE_S",
+    "manual_lease_s_env": "SJC_MANUAL_LEASE_S",
+    "manual_hold_ends_on": ["lease ran out", "emergency temperature", "fan-control took over"],
+    "release_action": "Dell automatic fans"
+  },
+  "subscribers": {"dashboard_backend": ["<prefix>/+/+", "<prefix>/+/result/+"]}
+}

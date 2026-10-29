@@ -93,8 +93,15 @@ def rsync_stats(text: str) -> tuple[int, int]:
 
 
 def rsync_cmd(src: str, alias: str, cap: int, extra: list[str]) -> list[str]:
-    cmd = ["rsync", "-a", "--stats", "--partial-dir=.rsync-partial", "--remove-source-files",
-           "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r", f"--timeout={IO_TIMEOUT_S}"]
+    cmd = [
+        "rsync",
+        "-a",
+        "--stats",
+        "--partial-dir=.rsync-partial",
+        "--remove-source-files",
+        "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r",
+        f"--timeout={IO_TIMEOUT_S}",
+    ]
     if cap > 0:
         cmd.append(f"--bwlimit={cap}")
     # rrsync on the receiver roots the key at its inbox, so the target is the inbox root "<to>-link:"
@@ -109,8 +116,18 @@ class Outbox:
         self.alias = f"{target}-link"
         self.wake = threading.Event()
         self.fails = 0
-        self.st = {"target": target, "cap_kbps": cap, "last_push_at": None, "last_ok_at": None, "last_error": None,
-                   "last_files": 0, "last_bytes": 0, "last_rate_Bps": None, "backoff_until": None, "pushing": False}
+        self.st = {
+            "target": target,
+            "cap_kbps": cap,
+            "last_push_at": None,
+            "last_ok_at": None,
+            "last_error": None,
+            "last_files": 0,
+            "last_bytes": 0,
+            "last_rate_Bps": None,
+            "backoff_until": None,
+            "pushing": False,
+        }
 
     def push(self) -> bool:
         """Push everything published now. Batch markers (*.done) go last, in their own pass, and only those that
@@ -195,11 +212,14 @@ def watch(outboxes: list[Outbox]) -> None:
             time.sleep(60)
             continue
         try:
-            p = subprocess.Popen(["inotifywait", "-m", "-r", "-q", "-e", "close_write,moved_to", "--format", "%w%f", *paths],
-                                 stdout=subprocess.PIPE, text=True)
+            p = subprocess.Popen(
+                ["inotifywait", "-m", "-r", "-q", "-e", "close_write,moved_to", "--format", "%w%f", *paths],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
             for line in p.stdout:
                 for prefix, ob in by_path.items():
-                    if line.startswith(prefix) and publishable(line.strip()[len(prefix):]):
+                    if line.startswith(prefix) and publishable(line.strip()[len(prefix) :]):
                         ob.wake.set()
             p.wait()
         except FileNotFoundError:
@@ -247,8 +267,11 @@ def main() -> None:
     outboxes = [Outbox(t, cap) for t, cap in targets]
     gate = threading.Semaphore(1 if serial else len(outboxes))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    log(f"link-pusher on {SELF}: " + ", ".join(f"{ob.name} -> {ob.alias} cap {ob.cap or 'none'}" for ob in outboxes)
-        + (" (one push at a time)" if serial else ""))
+    log(
+        f"link-pusher on {SELF}: "
+        + ", ".join(f"{ob.name} -> {ob.alias} cap {ob.cap or 'none'}" for ob in outboxes)
+        + (" (one push at a time)" if serial else "")
+    )
     threading.Thread(target=watch, args=(outboxes,), daemon=True).start()
     for ob in outboxes:
         threading.Thread(target=ob.loop, args=(gate,), daemon=True, name=ob.name).start()

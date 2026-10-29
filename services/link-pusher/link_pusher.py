@@ -25,6 +25,8 @@ STATUS_FILE = os.path.expanduser(env("LINK_STATUS_FILE", "~/link-pusher/status.j
 WARN_BYTES = int(float(env("LINK_WARN_GB", 50)) * 1e9)
 WARN_AGE_S = int(float(env("LINK_WARN_AGE_H", 24)) * 3600)
 IO_TIMEOUT_S = env_int("LINK_IO_TIMEOUT_S", 300)
+# a file is pushed only once it has not changed for this long and nothing has it open for writing
+SETTLE_S = env_int("LINK_SETTLE_S", 60)
 BACKOFF_MIN, BACKOFF_MAX = 30, 900
 NETWORK_FS = {"nfs", "nfs4", "cifs", "smb3", "fuse.sshfs", "9p"}
 RSYNC_OK = (0, 24)  # 24 = some source files vanished before transfer (a consumer or producer moved them): not an error
@@ -63,6 +65,46 @@ def walk(top: str):
             except OSError:
                 continue
             yield rel, st.st_size, st.st_mtime
+
+
+def open_for_write(top: str) -> set[str]:
+    """Real paths under top that some process (one this user can see in /proc) has open for writing."""
+    top = os.path.realpath(top).rstrip("/") + "/"
+    out = set()
+    for pid in os.listdir("/proc") if os.path.isdir("/proc") else []:
+        if not pid.isdigit():
+            continue
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(f"{fd_dir}/{fd}")
+                if not target.startswith(top):
+                    continue
+                with open(f"/proc/{pid}/fdinfo/{fd}") as f:
+                    flags = int(next(line for line in f if line.startswith("flags:")).split()[1], 8)
+            except (OSError, StopIteration, ValueError):
+                continue
+            if flags & 0o3:  # O_WRONLY or O_RDWR
+                out.add(target)
+    return out
+
+
+def settled(top: str, now: float | None = None) -> tuple[list[str], list[str]]:
+    """Split the publishable files under top into (ready, held). Held = changed in the last SETTLE_S seconds or still
+    open for writing: a producer that skipped write-then-rename must never lose the rest of its file to
+    --remove-source-files."""
+    now = time.time() if now is None else now
+    writing = open_for_write(top)
+    real_top = os.path.realpath(top)
+    ready, held = [], []
+    for rel, _, mtime in walk(top):
+        busy = now - mtime < SETTLE_S or os.path.join(real_top, rel) in writing
+        (held if busy else ready).append(rel)
+    return ready, held
 
 
 def fs_type(path: str, mounts_text: str | None = None) -> str:
@@ -116,6 +158,7 @@ class Outbox:
         self.alias = f"{target}-link"
         self.wake = threading.Event()
         self.fails = 0
+        self.held = 0
         self.st = {
             "target": target,
             "cap_kbps": cap,
@@ -137,13 +180,20 @@ class Outbox:
             # e.g. the hub's /link/gpusrv-hub while it is still an NFS mount: --remove-source-files would delete the
             # only copy on the far side. Never push from a network mount.
             raise RuntimeError(f"{self.path} is on {typ}, not a local folder; refusing to push")
-        markers = [rel for rel, _, _ in walk(self.path) if rel.endswith(".done")]
+        ready, held = settled(self.path)
+        self.held = len(held)
+        if held:
+            log(f"{self.name}: holding {len(held)} file(s) still being written or changed in the last {SETTLE_S}s: {held[0]}")
+        data = [r for r in ready if not r.endswith(".done")]
+        # markers listed now, before the data pass; sent only when nothing is held back, since a held file may be a part
+        markers = [r for r in ready if r.endswith(".done")] if not held else []
         t0 = time.time()
-        base = ["--exclude=.*", "--exclude=*.part", "--exclude=*.done"]
-        files, size = self._run(rsync_cmd(self.path, self.alias, self.cap, base))
-        if markers:
-            f2, s2 = self._run(rsync_cmd(self.path, self.alias, self.cap, ["--files-from=-"]), "\n".join(markers) + "\n")
-            files, size = files + f2, size + s2
+        files = size = 0
+        # explicit lists, never the whole folder: only files that are settled and closed are ever pushed (and removed)
+        for batch in (data, markers):
+            if batch:
+                f, s = self._run(rsync_cmd(self.path, self.alias, self.cap, ["--files-from=-"]), "\n".join(batch) + "\n")
+                files, size = files + f, size + s
         dt = max(time.time() - t0, 0.001)
         self.st.update(last_files=files, last_bytes=size, last_rate_Bps=int(size / dt) if size else None)
         self._prune_empty_dirs()
@@ -184,7 +234,8 @@ class Outbox:
                 # back-off: new files wait for the retry; nothing to gain hammering a link that is down
                 time.sleep(max(self.st["backoff_until"] - time.time(), 1))
                 continue
-            self.wake.wait(timeout=SWEEP_S)  # inotify, or the periodic sweep
+            # inotify, or the periodic sweep; files held back as unsettled are retried once they can have settled
+            self.wake.wait(timeout=SETTLE_S + 1 if self.held else SWEEP_S)
             time.sleep(2)  # let a burst of publishes land, then push them in one go
             self.wake.clear()
 

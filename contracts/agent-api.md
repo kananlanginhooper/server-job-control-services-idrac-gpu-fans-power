@@ -226,6 +226,20 @@ DESK_GPUS={"desk-gpu0": {"ollama": ["http://127.0.0.1:11434", "http://127.0.0.1:
 
 `GET /api/v1/gpus` (holds plus reported state), `POST /api/v1/gpus/{gpu}/hold {reason}` and `POST /api/v1/gpus/{gpu}/release`. LAN only; `by` = the caller (the login, once the IdP is in). Stored in `server_job_control_orders`.
 
-### 10.8 Dependency (job code, outside this repo)
+### 10.8 Exclusive claim and backfill (design, v2.2 draft; not in the mock yet)
+
+The owner's latest requirement is "a defined locking scheme". One process at a time keeps a GPU busy, and queue work only backfills it while it's idle. This builds on 10.1–10.7 and adds nothing parallel to them: **a hold *is* the exclusive claim.** Every hold names an owner (`by`), a `reason` and a `since`, and backfill is just the consumer tasks of 10.2.
+
+- **A third origin: `lock`.** The project's job locks (the lock script on the hub, one directory per job; its `owner` file has `owner:`, `claimed:` and `what:` lines) can name a GPU. The `<HOST>_GPUS` entry gets `"lock": "<lock name>"`. While that lock directory exists, the owning host treats the GPU as held with `origin: "lock"`, `by` = `owner:`, `since` = `claimed:` and `reason` = `what:`. It reports this in `health.gpus[].holds`, and the container relays it like a local hold (10.5). The lock is released only by its own owner through the lock script. A dashboard release never clears it; the container shows "held by lock `<name>` (owner …)".
+- **Origins combine (OR):** container, local and lock. Any one of them makes the GPU held, and each is cleared only by its own origin.
+- **Backfill start gate (consumers).** A task with the GPU in `needs.gpus` starts an instance only if:
+  1. no hold of any origin is present, **and**
+  2. the GPU is idle of *foreign* work: VRAM used by processes outside this GPU's map (its listed units, its Ollama instances) is under `GPU_IDLE_MAX_MB` (default 2048), and no Ollama instance of this GPU has a model loaded that none of its consumers asked for. Each consumer task lists its models in `needs.models`.
+  This gate is checked by the owning host. It is reported per GPU as `idle: true|false` with a `foreign` list (pids/models), and the container passes it to the consumer hosts in `settings.gpu_idle` with each report. A consumer host with no fresh `gpu_idle` (older than 2 report intervals) does not start new instances; already running ones keep going.
+- **Yield:** a hold appearing (any origin) puts the consumers in `drain` exactly as in 10.3, within the 90 s budget. Foreign VRAM appearing while consumers run doesn't stop them, because the claim is the contract. A process that needs the GPU takes the claim first.
+- **Who takes a claim:** anything outside the queue that wants the GPU exclusively (a manual job, an offline batch run, the dashboard itself when it's the primary user). It claims through the dashboard (container origin), through `taskctl gpu hold` on the owning host (local), or through a job lock named in the map. It should wait for `hold: "held"` with empty `blockers` before loading its own model.
+- **Not changed:** Low Power / run mode gates (10.2), the GPU switch (core safety), and `enabled`.
+
+### 10.9 Dependency (job code, outside this repo)
 
 "Finish or requeue the current item, save progress" is the **job's** responsibility. The runner only sends SIGTERM and waits `stop_secs`. Every GPU job (video stages, the VLM runner) must, on SIGTERM, requeue or finish its current item within `stop_secs` (≤ 60). That's the Home-server single thread's job code.

@@ -1,6 +1,7 @@
 [Unit]
 Description=Enable the drive write cache on the listed data SSDs (by serial)
 After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
 
 [Service]
 Type=oneshot

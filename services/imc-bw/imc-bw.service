@@ -4,7 +4,7 @@ Description=RAM bandwidth from the Intel uncore IMC counters, written to /dev/sh
 [Service]
 ExecStart=/usr/bin/python3 @REPO@/services/imc-bw/imc-bw.py /dev/shm/imc-bw.json
 Restart=always
-RestartSec=10
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

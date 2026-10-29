@@ -7,8 +7,10 @@ Wants=network-online.target
 User=@USER@
 # needs a venv with faster-whisper; WHISPER_PYTHON in the repo .env points at its python
 ExecStart=/bin/bash -c '. @REPO@/lib/svcenv.sh; exec $(svc_env WHISPER_PYTHON python3) @REPO@/services/whisper-server/whisper_server.py %i 10'
-Restart=always
-RestartSec=10
+# on-failure, not always: a power hook that stops it on purpose must leave it stopped
+Restart=on-failure
+RestartSec=30
+Nice=10
 
 [Install]
 WantedBy=multi-user.target

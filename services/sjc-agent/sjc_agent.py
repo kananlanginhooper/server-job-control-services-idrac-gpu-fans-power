@@ -38,7 +38,7 @@ manual = {"pct": None, "until": 0.0, "by": None, "released": None}  # the agent'
 lock = threading.Lock()
 
 
-def pub(client: mqtt.Client, part: str, payload) -> None:
+def pub(client: mqtt.Client, part: str, payload: object) -> None:
     client.publish(f"{BASE}/{part}", json.dumps(payload, default=str), qos=0, retain=True)
 
 
@@ -83,8 +83,8 @@ def guard_tick() -> None:
             manual.update(pct=None, until=0.0, released={"at": time.time(), "why": "fan-control took over"})
 
 
-def loop(every: float, fn) -> None:
-    def run():
+def loop(every: float, fn: object) -> None:
+    def run() -> None:
         while True:
             t0 = time.time()
             try:
@@ -102,12 +102,12 @@ def main() -> None:
     client.will_set(f"{BASE}/status", "offline", qos=1, retain=True)
     client.reconnect_delay_set(1, 30)
 
-    def on_connect(c, _u, _f, rc, _p=None):
+    def on_connect(c: mqtt.Client, _u: object, _f: object, rc: object, _p: object = None) -> None:
         log.info("mqtt connected (%s)", rc)
         c.publish(f"{BASE}/status", "online", qos=1, retain=True)
         c.subscribe(f"{BASE}/cmd/+", qos=1)
 
-    def on_message(c, _u, msg):
+    def on_message(c: mqtt.Client, _u: object, msg: mqtt.MQTTMessage) -> None:
         name = msg.topic.rsplit("/", 1)[-1]
         try:
             body = json.loads(msg.payload or b"{}")
@@ -122,22 +122,22 @@ def main() -> None:
     client.connect_async(S.mqtt_host, S.mqtt_port, keepalive=30)
     client.loop_start()
 
-    def sensors():
+    def sensors() -> None:
         v = idrac.sensors()
         latest["idrac"] = v
         pub(client, "idrac", v)
         pub(client, "power", power_stats())
 
-    def power():
+    def power() -> None:
         r = idrac.dcmi()
         if r:
             power_q.append((r["t"], r["w"]))
 
-    def gpus():
+    def gpus() -> None:
         latest["gpu"] = gpu.gpus()
         pub(client, "gpu", {"at": time.time(), "cards": latest["gpu"]})
 
-    def safety_pub():
+    def safety_pub() -> None:
         guard_tick()
         pub(
             client,
@@ -151,7 +151,7 @@ def main() -> None:
         )
         pub(client, "runlevel", {"at": time.time()} | safety.runlevel())
 
-    def system_pub():
+    def system_pub() -> None:
         pub(client, "system", system.snapshot())
 
     loop(S.sensor_every_s, sensors)

@@ -6,6 +6,8 @@ Use it wherever a service takes the nvidia-smi command, e.g.  SJC_NVIDIA_SMI="py
 MOCK_GPU_TEMP sets the temperature (to test Emergency handling).
 """
 
+from __future__ import annotations
+
 import os
 import sys
 
@@ -15,7 +17,7 @@ ROW = f"0, Mock GPU 24GB, {TEMP}, 87, 20480, 24564, 65, 301.50, 400.00, 150.00, 
 APPS = "4242, ollama, 18000\n"
 
 
-def main(a):
+def main(a: list[str]) -> int:
     if any(x.startswith("--query-gpu=") for x in a):
         print(ROW)
     elif any(x.startswith("--query-compute-apps=") for x in a):

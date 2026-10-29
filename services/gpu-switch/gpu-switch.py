@@ -6,6 +6,8 @@ OFF: Copilot runner held (its HOLD file, tagged "gpu-switch") + graceful stop vi
      stays), Ollama started again, Copilot resumed through the hook only when the run mode is not scaled down.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
@@ -23,12 +25,12 @@ HOOK = "/dev/shm/power-hooks/copilot.sh"
 LOG, STATE = "/dev/shm/gpu-switch.log", "/dev/shm/gpu-switch.json"
 
 
-def log(m):
+def log(m: str) -> None:
     with open(LOG, "a") as f:
         f.write(time.strftime("%FT%T ") + m + "\n")
 
 
-def run(cmd):
+def run(cmd: list[str]) -> int:
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=120).returncode
     except Exception as e:
@@ -36,7 +38,7 @@ def run(cmd):
         return -1
 
 
-def main():
+def main() -> None:
     applied = None
     log("start")
     while True:

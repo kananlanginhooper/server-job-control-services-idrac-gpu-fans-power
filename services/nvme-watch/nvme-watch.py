@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # NVMe watch for the hub: every minute, per controller: state, temperature, SMART error counters and kernel
 # timeout/reset messages. Logs changes to /var/log/nvme-watch.log and reports each drive to the dashboard Tasks table.
+from __future__ import annotations
+
 import glob
 import json
 import os
@@ -20,12 +22,12 @@ TEMP_ALERT = 84  # composite; Samsung 990 PRO warning 82, critical 85 (2026-09-2
 KERNEL_BAD = re.compile(r"nvme\d*.*(timeout|reset|abort|not ready|dead|I/O error|Removing after probe failure)", re.I)
 
 
-def log(msg):
+def log(msg: str) -> None:
     with open(LOG, "a") as f:
         f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {msg}\n")
 
 
-def post(task):
+def post(task: dict) -> None:
     try:
         req = urllib.request.Request(DASH, json.dumps(task).encode(), {"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=5).read()
@@ -33,7 +35,7 @@ def post(task):
         pass
 
 
-def controllers():
+def controllers() -> dict[str, dict]:
     out = {}
     for c in sorted(glob.glob("/sys/class/nvme/nvme[0-9]*")):
         name = os.path.basename(c)
@@ -61,14 +63,14 @@ def controllers():
     return out
 
 
-def kernel_lines(since):
+def kernel_lines(since: str) -> list[str]:
     r = subprocess.run(
         ["journalctl", "-k", "--since", since, "-o", "short-iso", "--no-pager"], capture_output=True, text=True, timeout=30
     )
     return [l for l in r.stdout.splitlines() if KERNEL_BAD.search(l)]
 
 
-def main():
+def main() -> None:
     prev, base = {}, {}
     log("started")
     while True:

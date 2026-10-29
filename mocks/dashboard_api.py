@@ -16,6 +16,8 @@ Run it for a demo or a manual test:   python mocks/dashboard_api.py --port 8090 
 then point HUB_API_URL at http://127.0.0.1:8090.
 """
 
+from __future__ import annotations
+
 import argparse
 import copy
 import json
@@ -26,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HUB, SRV = "hub", "gpu-server"
 
 
-def default_state(hub=HUB, srv=SRV):
+def default_state(hub: str = HUB, srv: str = SRV) -> dict:
     now = time.time()
     return {
         "powertarget": {"scale": "up", "mode": "adaptive", "combined_w": 1250, f"{srv}_w": 1000, "gpu_off": False},
@@ -49,17 +51,17 @@ def default_state(hub=HUB, srv=SRV):
 class MockDashboard:
     """A dashboard API on 127.0.0.1:<port> (0 = any free port) in a background thread."""
 
-    def __init__(self, port=0, state=None, hub=HUB, srv=SRV):
+    def __init__(self, port: int = 0, state: dict | None = None, hub: str = HUB, srv: str = SRV) -> None:
         self.state = state or default_state(hub, srv)
         self.throttles, self.tasks, self.posts = {}, {}, []
         self.lock = threading.Lock()
         mock = self
 
         class H(BaseHTTPRequestHandler):
-            def log_message(self, *a):
+            def log_message(self, *a: object) -> None:
                 pass
 
-            def _send(self, obj, code=200):
+            def _send(self, obj: object, code: int = 200) -> None:
                 body = json.dumps(obj).encode()
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
@@ -67,7 +69,7 @@ class MockDashboard:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def do_GET(self):
+            def do_GET(self) -> None:
                 path = self.path.split("?")[0]
                 with mock.lock:
                     if path == "/api/throttle":
@@ -82,7 +84,7 @@ class MockDashboard:
                         return self._send(copy.deepcopy(mock.state[key]))
                 self._send({"error": "not found"}, 404)
 
-            def do_POST(self):
+            def do_POST(self) -> None:
                 path = self.path.split("?")[0]
                 n = int(self.headers.get("Content-Length") or 0)
                 try:
@@ -107,15 +109,23 @@ class MockDashboard:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
-    def __enter__(self):
+    def __enter__(self) -> MockDashboard:
         self.thread.start()
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc: object) -> None:
         self.server.shutdown()
         self.server.server_close()
 
-    def set_power(self, hub_peak=None, hub_avg=None, srv_peak=None, srv_avg=None, pkg_w=None, gpu_draw=None):
+    def set_power(
+        self,
+        hub_peak: float | None = None,
+        hub_avg: float | None = None,
+        srv_peak: float | None = None,
+        srv_avg: float | None = None,
+        pkg_w: float | None = None,
+        gpu_draw: float | None = None,
+    ) -> None:
         """Change the live readings the next GET /api/state returns (and mark them fresh)."""
         with self.lock:
             s, now = self.state["state"], time.time()

@@ -37,6 +37,8 @@ Runs on the hub: ~/power-guard (systemd power-guard.service, User=<user>).
 Usage: power-guard.py run [--dry-run] | status | clear [<GPU_SERVER_KEY>|<HUB_KEY>|<GPU_THROTTLE_KEY>|all]
 """
 
+from __future__ import annotations
+
 import json, os, subprocess, sys, time, urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lib"))
@@ -58,7 +60,7 @@ SSH_KEY = os.path.expanduser(
 )  # hub -> GPU server (<user>), read-only use: RAPL energy counters
 
 
-def cfg_keys(cfg):
+def cfg_keys(cfg: dict | None) -> dict | None:
     """Also accept config keys named after the dashboard's host keys (<HUB_KEY>_floor_w, <GPU_SERVER_KEY>_max_pkg_w, ...),
     the older form, so an existing power-guard.json works unchanged."""
     if cfg:
@@ -73,14 +75,14 @@ def cfg_keys(cfg):
     return cfg
 
 
-def log(msg):
+def log(msg: str) -> None:
     line = time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + msg
     print(line, flush=True)
     with open(LOG, "a") as f:
         f.write(line + "\n")
 
 
-def load(path, default):
+def load(path: str, default: object) -> object:
     try:
         with open(path) as f:
             return json.load(f)
@@ -88,13 +90,13 @@ def load(path, default):
         return default
 
 
-def save(st):
+def save(st: dict) -> None:
     with open(STATE + ".tmp", "w") as f:
         json.dump(st, f, indent=1)
     os.replace(STATE + ".tmp", STATE)
 
 
-def api(path, body=None):
+def api(path: str, body: object = None) -> object:
     req = urllib.request.Request(
         API + path,
         data=json.dumps(body).encode() if body is not None else None,
@@ -108,7 +110,7 @@ def api(path, body=None):
         return raw.decode(errors="replace")
 
 
-def readings():
+def readings() -> dict:
     t, s = api("/api/powertarget"), api("/api/state")
     rf = (s.get("remote") or {}).get("fast") or {}
     l, r = (s.get("fast") or {}).get("power"), rf.get("power")
@@ -131,7 +133,7 @@ def readings():
     }
 
 
-def ours():
+def ours() -> dict:
     """Active throttles set by this thread: GET /api/throttle -> {host: {..., by, until, left_s}}."""
     got = api("/api/throttle")
     return {
@@ -141,7 +143,7 @@ def ours():
     }
 
 
-def triggers(x, margin):
+def triggers(x: dict, margin: float) -> list[tuple[str, str]]:
     out = []
     if x["comb_peak"] > x["combined_w"] + margin:
         out.append(("combined", f"PEAK {x['comb_peak']:.0f} > {x['combined_w']}+{margin}"))
@@ -154,7 +156,7 @@ def triggers(x, margin):
     return out
 
 
-def post(host, st, cfg, reason, dry):
+def post(host: str, st: dict, cfg: dict, reason: str, dry: bool) -> None:
     body = {"host": host, "seconds": cfg["hold_s"], "by": BY, "reason": reason[:200]}
     body[{SRV: "rapl_package_w", HUB: "dcmi_w", GPUK: "gpu_w"}[host]] = st["cap"][host]
     if not dry:
@@ -162,7 +164,7 @@ def post(host, st, cfg, reason, dry):
     st["posted"][host] = time.time()
 
 
-def srv_pkg_w():
+def srv_pkg_w() -> float:
     """Actual GPU server CPU package watts (max of its packages), from intel-rapl energy over 1 s, via ssh with the hub key."""
     cmd = (
         "a=$(sudo -n cat /sys/class/powercap/intel-rapl:[0-9]/energy_uj | tr '\\n' ' '); sleep 1; "
@@ -178,7 +180,7 @@ def srv_pkg_w():
     return max((y - x0) / 1e6 for x0, y in zip(a, b) if y >= x0)
 
 
-def tighten(cfg, st, x, scope, reason, dry):
+def tighten(cfg: dict, st: dict, x: dict, scope: str, reason: str, dry: bool) -> str | None:
     """One step down. A combined over steps BOTH servers at once, about the same watts from each (2026-09-29:
     "reducing the CPU wattage for both servers at the same time", "limit each server approximately equally"). Each cap
     is set below the server's ACTUAL draw so it binds: GPU server per-package cap = actual package W - step_w/2 (two
@@ -214,7 +216,7 @@ def tighten(cfg, st, x, scope, reason, dry):
 
     # 2026-10-01: one GPU, long jobs -> the GPU is the LAST lever: only once the CPUs are throttled a good share of the
     # way to their floors (average of both, 0 = normal cap, 1 = floor), and with a smaller step than the CPUs
-    def frac(h, normal, floor):
+    def frac(h: str, normal: float, floor: float) -> float:
         c = st["cap"].get(h)
         return 0.0 if c is None else max(0.0, min(1.0, (normal - c) / max(1, normal - floor)))
 
@@ -234,7 +236,7 @@ def tighten(cfg, st, x, scope, reason, dry):
     return "+".join(h for h in (SRV, HUB, SRV + " GPU") if any(d.startswith(h + " ") for d in done))
 
 
-def loosen(cfg, st, x, dry):
+def loosen(cfg: dict, st: dict, x: dict, dry: bool) -> bool:
     """One step UP on every active cap (2026-10-01: use the hardware fully). A cap that reaches its normal value is
     cleared instead of re-posted."""
     done = []
@@ -271,7 +273,7 @@ def loosen(cfg, st, x, dry):
     return bool(done)
 
 
-def run(dry):
+def run(dry: bool) -> None:
     cfg = cfg_keys(load(CFG, None)) or sys.exit(f"missing {CFG}")
     st = load(STATE, {})
     st.setdefault("cap", {})
@@ -343,13 +345,13 @@ def run(dry):
         time.sleep(max(1, cfg["interval_s"] - (time.time() - t0)))
 
 
-def clear(which):
+def clear(which: str) -> None:
     for h in [SRV, HUB, GPUK] if which == "all" else [which]:
         api("/api/throttle", {"host": h, "clear": True, "by": BY})
         log(f"CLEAR {h} throttle (sizing pass)")
 
 
-def status():
+def status() -> None:
     st = load(STATE, {})
     print(
         json.dumps(

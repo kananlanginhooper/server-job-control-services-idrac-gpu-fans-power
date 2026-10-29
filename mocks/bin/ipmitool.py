@@ -6,6 +6,8 @@ or IPMITOOL_CMD="python mocks/bin/ipmitool.py". Writes (raw fan commands, peak r
 MOCK_IPMI_TEMP_CPU raises the CPU temperatures (to test Emergency handling).
 """
 
+from __future__ import annotations
+
 import os
 import sys
 
@@ -54,14 +56,14 @@ Peak Reading   : 431 W
 """
 
 
-def log_write(args):
+def log_write(args: list[str]) -> None:
     p = os.environ.get("MOCK_IPMI_LOG")
     if p:
         with open(p, "a") as f:
             f.write(" ".join(args) + "\n")
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     a = list(argv)
     while a and a[0] in ("-I", "-H", "-U", "-P", "-S"):  # connection options and the SDR cache: ignored
         a = a[2:]

@@ -80,12 +80,54 @@ def test_markers_go_last_and_only_preexisting(lp, tmp_path, monkeypatch):
             touch(os.path.join(ob.path, "set2.done"))
         return 1, 10
 
+    for rel in ("set1/a.bin", "set1.done"):
+        age(os.path.join(ob.path, rel), 600)
     monkeypatch.setattr(lp, "fs_type", lambda path, mounts_text=None: "ext4")
     monkeypatch.setattr(ob, "_run", fake_run)
     ob.push()
-    assert "--exclude=*.done" in calls[0][0] and calls[0][1] is None
+    assert calls[0][1] == "set1/a.bin\n"
     assert "--files-from=-" in calls[1][0] and calls[1][1] == "set1.done\n"
     assert ob.st["last_files"] == 2 and ob.st["last_bytes"] == 20
+
+
+def age(path, secs):
+    t = os.path.getmtime(path) - secs
+    os.utime(path, (t, t))
+
+
+def test_unsettled_files_are_held(lp, monkeypatch):
+    """A file changed in the last SETTLE_S, or still open for writing, is never pushed (nor removed); while anything is
+    held, markers wait too."""
+    ob = lp.Outbox("desk", 1000)
+    for rel in ("old.bin", "young.bin", "open.bin", "set.done"):
+        touch(os.path.join(ob.path, rel))
+    for rel in ("old.bin", "open.bin", "set.done"):
+        age(os.path.join(ob.path, rel), 600)
+    open_path = os.path.join(os.path.realpath(ob.path), "open.bin")
+    monkeypatch.setattr(lp, "open_for_write", lambda top: {open_path})
+    monkeypatch.setattr(lp, "fs_type", lambda path, mounts_text=None: "ext4")
+    calls = []
+    monkeypatch.setattr(ob, "_run", lambda cmd, stdin=None: calls.append(stdin) or (1, 1))
+    ob.push()
+    assert calls == ["old.bin\n"] and ob.held == 2
+    # once settled and closed, the rest go, marker last
+    age(os.path.join(ob.path, "young.bin"), 600)
+    monkeypatch.setattr(lp, "open_for_write", lambda top: set())
+    calls.clear()
+    ob.push()
+    assert calls == ["old.bin\nopen.bin\nyoung.bin\n", "set.done\n"] and ob.held == 0
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs Linux /proc")
+def test_open_for_write_sees_own_writer(lp, tmp_path):
+    p = tmp_path / "w.bin"
+    with open(p, "w") as f:
+        f.write("x")
+        f.flush()
+        assert os.path.realpath(p) in lp.open_for_write(str(tmp_path))
+    assert os.path.realpath(p) not in lp.open_for_write(str(tmp_path))
+    with open(p) as f:  # read-only opens don't count
+        assert os.path.realpath(p) not in lp.open_for_write(str(tmp_path))
 
 
 def test_rsync_stats(lp):

@@ -1,4 +1,4 @@
-"""Mock of the control container's agent API (contract: contracts/agent-api.md, v2), stdlib only.
+"""Mock of the control container's agent API (contract: contracts/agent-api.md, v2.1), stdlib only.
 
 The reference both sides test against: the per-server agent (this repo) and the container (Recovery's hub/).
   GET  /api/v1/agent/servers/{host}/orders?version=N&wait=S     200 orders | 304 empty body
@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 COMMANDS = {"task.restart", "task.run_now", "unit.restart", "agent.resync"}  # v2: no hardware commands
 EXPIRY_S, MAX_WAIT_S = 600, 25
+DRAIN_TIMEOUT_S, REPORT_STALE_S = 60, 60  # v2.1 GPU hold (section 10.3)
 
 
 def sha256(s: str) -> str:
@@ -42,6 +43,7 @@ class MockAgentAPI:
         self.reports: dict[str, list] = {}
         self.commands: dict[str, dict] = {}  # id -> {id, host, cmd, args, by, queued_at, expires_at, state, result}
         self.items: dict[str, dict] = {}  # id -> {id, queue, payload, attempt, state, lease_until, max_attempts, ...}
+        self.gpu_holds: dict[str, dict] = {}  # gpu -> {gpu, phase, by, since, reason} (container-origin holds)
         self._ids = itertools.count(1)
         mock = self
 
@@ -89,7 +91,8 @@ class MockAgentAPI:
                         return self._send(o) if o else self._send(None, 304)
                     if method == "POST" and parts[2:] == ["report"]:
                         with mock.cv:
-                            mock.reports.setdefault(host, []).append(self._body())
+                            mock.reports.setdefault(host, []).append(dict(self._body(), _received=mock.now()))
+                            mock.advance_holds()
                         return self._send({"ok": True})
                     if method == "GET" and parts[2:] == ["commands"]:
                         return self._send(mock.claim_commands(host, wait))
@@ -142,11 +145,64 @@ class MockAgentAPI:
             while True:
                 o = self.orders.get(host)
                 if o and o["version"] > version:
-                    return o
+                    return dict(o, settings=dict(o["settings"], gpu_holds=[dict(h) for h in self.gpu_holds.values()]))
                 left = end - time.time()
                 if left <= 0:
                     return None
                 self.cv.wait(left)
+
+    # ---------- GPU hold / release (section 10) ----------
+    def _bump_all(self) -> None:
+        """A hold change goes into EVERY host's orders (consumers can sit on other hosts)."""
+        for h in set(self.token_hashes.values()) | set(self.orders):
+            o = self.orders.get(h) or {"version": 0, "tasks": [], "settings": {}}
+            self.orders[h] = dict(o, version=o["version"] + 1, at=self.now())
+        self.cv.notify_all()
+
+    def hold_gpu(self, gpu: str, by: str, reason: str = "") -> None:
+        with self.cv:
+            self.gpu_holds[gpu] = {"gpu": gpu, "phase": "drain", "by": by, "since": self.now(), "reason": reason}
+            self._bump_all()
+
+    def release_gpu(self, gpu: str) -> bool:
+        """Clears only the container's hold (a local hold on the owning host stays; section 10.5)."""
+        with self.cv:
+            h = self.gpu_holds.get(gpu)
+            if not h:
+                return False
+            h.update(phase="resume", resume_at=self.now())
+            self._bump_all()
+            return True
+
+    def _latest(self, host: str) -> dict | None:
+        r = self.reports.get(host)
+        return r[-1] if r else None
+
+    def advance_holds(self) -> None:
+        """Move phases from reports: drain -> free when every consumer reports stopped (or its host is silent), or after
+        the drain timeout; resume -> removed when the owning host reports the GPU active again."""
+        with self.cv:
+            changed = False
+            now = self.now()
+            for gpu, h in list(self.gpu_holds.items()):
+                if h["phase"] == "drain":
+                    running = False
+                    for host, o in self.orders.items():
+                        names = {t["name"] for t in o["tasks"] if gpu in ((t.get("needs") or {}).get("gpus") or [])}
+                        r = self._latest(host)
+                        if not names or not r or now - r["_received"] >= REPORT_STALE_S:
+                            continue
+                        running |= any(t.get("instances_running") for t in r.get("tasks", []) if t.get("name") in names)
+                    if not running or now - h["since"] >= DRAIN_TIMEOUT_S:
+                        h["phase"], changed = "free", True
+                elif h["phase"] == "resume":
+                    r = self._latest(gpu.split("-", 1)[0])
+                    g = next((g for g in ((r or {}).get("health") or {}).get("gpus", []) if g.get("gpu") == gpu), None)
+                    if g and g.get("hold") == "active" and r["_received"] >= h["resume_at"]:
+                        del self.gpu_holds[gpu]
+                        changed = True
+            if changed:
+                self._bump_all()
 
     def enqueue(self, host: str, cmd: str, args: dict | None = None, by: str = "test") -> str:
         if cmd not in COMMANDS:

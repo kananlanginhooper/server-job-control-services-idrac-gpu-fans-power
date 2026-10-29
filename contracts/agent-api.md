@@ -1,4 +1,4 @@
-# Agent API contract: control container ⇄ per-server agent (version 2)
+# Agent API contract: control container ⇄ per-server agent (version 2.1)
 
 **This file is the one source of truth** for the API between the control container (owner: the Recovery page thread; `hub/`, FastAPI) and the per-server agent (owner: Server Services; the task runner growing into the agent).
 
@@ -9,6 +9,7 @@
   - `fan.override` and `gpu.limit` are removed from the agent commands: fan override and the GPU power limit go through :8090, as standard operation;
   - emergencies stay purely local on each server;
   - the orders database is named `server_job_control_orders`.
+  - **v2.1** (tag `agent-api-v2.1`, additive): per-GPU hold / release (section 10), agreed with the container's owner on the owner's requirement.
 
 **Direction (owner, 2026-10-29):**
 - ONE control container holds the REST API, the database access and the queue for every server.
@@ -159,3 +160,72 @@ Each step is its own branch, tested against the mock. Each host step goes throug
 3. Fewer units: reporting helper loops that need no early boot (peak-power, imc-bw, nvme-watch, gpu-perf) may become runner tasks, one at a time, each with its own announced window.
    **Never moved: the core safety layer** (section 1). power-guard, fan-control and gpu-switch stay their own units permanently, and so does wherever the run mode and power target live. fan-control starts at `basic.target` with nothing else running.
 4. dash-agent's state collection moves into the agent's report, and its HTTP :8091 is retired once the container reads reports instead.
+
+## 10. GPU hold / release (v2.1)
+
+**Requirement (owner):** per GPU, *hold* = stop new work, finish or requeue the current item, save progress, unload the models, so the GPU is free within ~90 s; *release* = start its workers again. Who, since when and why are visible, the hold survives restarts, and it never fights run mode or Low Power. The full requirement is in the task runner's operating notes (sections 11-12 of the current-state write-up); until this is built, the manual procedure there is the way.
+
+**GPU ids** are `<host>-<model>`, as in the image pipeline's `gpu` values (e.g. `desk-gpu0`). The part before the first `-` is the **owning host** (the one whose memory the GPU is), matching its `HOST_KEY`.
+
+### 10.1 Desired state, in every host's orders
+
+```json
+"settings": {"gpu_holds": [{"gpu": "desk-gpu0", "phase": "drain", "by": "owner", "since": 1793300000.0, "reason": "manual job"}]}
+```
+
+- The list is global: every host gets every hold, because a GPU's consumers can run on other hosts (the desktop GPU's VLM tasks run on the hub, through tunnels). Any change bumps **every** host's `version`.
+- `phase`: `drain` → `free` → (release) `resume` → removed. The container moves it (10.3); agents act on it.
+
+### 10.2 Which tasks use which GPU
+
+- A task lists its GPUs in **`needs.gpus`**: a list of GPU ids. This is new and separate from `needs.gpu: true`, which stays the Low Power start gate, unchanged.
+- A task is **on hold** while any of its GPUs has a hold in phase `drain`, `free` or `resume`. The runner stops it like a disable (SIGTERM, then SIGKILL after `stop_secs`), but **`enabled` is not changed**. When the hold is removed, the task starts again by itself, still subject to Low Power and its other needs.
+- **Gates combine, never override:** a task runs only if it isn't on hold **and** Low Power / run mode allow it. A release during Low Power leaves the task paused; Low Power ending doesn't undo a hold. The GPU switch (`gpu_off` on :8090) is core safety and separate (section 1).
+
+### 10.3 Phases (the container moves them from reports)
+
+| Phase | Consumer hosts (tasks with the GPU in `needs.gpus`) | Owning host | Container moves on when |
+|---|---|---|---|
+| `drain` | stop those tasks | nothing yet (unloading now would just make a still-running consumer reload the model) | every consumer task reports `instances_running: 0`, **or** 60 s after `since`. At the timeout, a consumer still running stays in the owning host's `blockers`, and its orders stay "on hold"; nothing is killed harder |
+| `free` | keep them stopped | unload the models from every Ollama instance of that GPU (`keep_alive: 0` for each model `/api/ps` lists), stop that GPU's units, report memory | - (stays until release) |
+| `resume` | keep them stopped | start that GPU's units; report `hold: "active"` once they're up | the owning host reports `hold: "active"` → the hold is **removed** → consumers start by themselves |
+
+When every consumer is on the owning host itself, it may go `drain` → `free` locally without waiting for the container's round trip.
+
+**90 s budget:** a drain of ≤ 60 s (GPU tasks keep `stop_secs` ≤ 60), plus one report and long-poll round trip (about 1-2 s, since reports go out at once on change), plus an unload of about 10-20 s. If it isn't done by 90 s, the report's `blockers` say what still holds the GPU and the dashboard shows it. Nothing is escalated automatically.
+
+### 10.4 Host-local GPU map (`.env`, not orders)
+
+```
+DESK_GPUS={"desk-gpu0": {"ollama": ["http://127.0.0.1:11434", "http://127.0.0.1:11437"], "units": ["tug-vision"]}}
+```
+
+`<HOST>_GPUS` names, per GPU the host owns, its Ollama instances and its units. The agent stops and starts only units in that list.
+
+### 10.5 Local holds (with the container down)
+
+- `taskctl gpu hold <gpu> --reason ...` / `taskctl gpu release <gpu>` on the owning host place a **local** hold. It's stored in the local database, acted on the same way (local consumers drain, then free), and reported with `origin: "local"`.
+- Container and local holds combine (OR). A release only clears its own origin.
+  - A dashboard release never clears a local hold. The container shows "held locally on `<host>`; release it there (`taskctl gpu release <gpu>`)" and never fakes a release.
+  - A local hold only drains consumers on the owning host itself; other hosts learn of it when the container relays it.
+
+### 10.6 Report
+
+`health.gpus` lists every GPU the host owns:
+
+```json
+"gpus": [{"gpu": "desk-gpu0", "hold": "held", "since": 1793300000.0, "mem_used_mb": 310,
+          "blockers": [], "holds": [{"origin": "container", "by": "owner", "since": 1793300000.0, "reason": "manual job"}]}]
+```
+
+- `hold` is `active`, `draining`, `held` or `resuming`. `held` with empty `blockers` means the memory is actually free.
+- `blockers`: names of tasks (`<host>/<task>`) or units still holding the GPU.
+- Consumer hosts report their consumer tasks as usual (`tasks[].instances_running`); that's what the container watches in `drain`.
+
+### 10.7 Container side (owned by the Recovery page thread; listed here for reference)
+
+`GET /api/v1/gpus` (holds plus reported state), `POST /api/v1/gpus/{gpu}/hold {reason}` and `POST /api/v1/gpus/{gpu}/release`. LAN only; `by` = the caller (the login, once the IdP is in). Stored in `server_job_control_orders`.
+
+### 10.8 Dependency (job code, outside this repo)
+
+"Finish or requeue the current item, save progress" is the **job's** responsibility. The runner only sends SIGTERM and waits `stop_secs`. Every GPU job (video stages, the VLM runner) must, on SIGTERM, requeue or finish its current item within `stop_secs` (≤ 60). That's the Home-server single thread's job code.

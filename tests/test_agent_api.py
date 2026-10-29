@@ -143,3 +143,74 @@ def test_queue_lease_retry_and_failure(api):
     assert [(x["id"], x["attempt"]) for x in again] == [(i2, 2)]
     assert call(api, "POST", f"/queues/items/{i2}/failed", {"error": "x", "retry": True})[0] == 200
     assert api.items[i2]["state"] == "failed"  # max_attempts reached: stays failed for a person
+
+
+# ---------- v2.1: GPU hold / release (section 10) ----------
+# hostb owns the GPU "hostb-gpu"; its consumer task "vlm" runs on hosta (like the desktop GPU's VLM tasks on the hub)
+VLM = {"name": "vlm", "command": "true", "kind": "continuous", "instances": 2, "enabled": True, "needs": {"gpus": ["hostb-gpu"]}}
+
+
+def report(api, host, token, tasks=(), gpus=()):
+    body = {"at": time.time(), "orders_version": 0, "tasks": list(tasks), "runs": [], "health": {"gpus": list(gpus)}}
+    assert call(api, "POST", f"/servers/{host}/report", body, token=token)[0] == 200
+
+
+def holds(api, host, token):
+    return call(api, "GET", f"/servers/{host}/orders?version=0", token=token)[1]["settings"]["gpu_holds"]
+
+
+def test_hold_reaches_every_host_and_bumps_versions(api):
+    va = api.set_orders("hosta", [VLM])
+    vb = api.set_orders("hostb", [])
+    api.hold_gpu("hostb-gpu", "owner", "manual job")
+    oa = call(api, "GET", f"/servers/hosta/orders?version={va}&wait=0")[1]
+    ob = call(api, "GET", f"/servers/hostb/orders?version={vb}&wait=0", token="tok-b")[1]
+    assert oa["version"] > va and ob["version"] > vb  # a hold change bumps EVERY host
+    for o in (oa, ob):
+        (h,) = o["settings"]["gpu_holds"]
+        assert (h["gpu"], h["phase"], h["by"], h["reason"]) == ("hostb-gpu", "drain", "owner", "manual job")
+
+
+def test_drain_waits_for_consumers_then_frees(api):
+    api.set_orders("hosta", [VLM])
+    api.hold_gpu("hostb-gpu", "owner")
+    report(api, "hosta", "tok-a", [{"name": "vlm", "instances_running": 1}])
+    assert holds(api, "hostb", "tok-b")[0]["phase"] == "drain"  # a consumer still runs: the owner must not unload yet
+    report(api, "hosta", "tok-a", [{"name": "vlm", "instances_running": 0}])
+    assert holds(api, "hostb", "tok-b")[0]["phase"] == "free"  # every consumer stopped: the owner unloads now
+
+
+def test_drain_times_out_to_free_with_the_consumer_still_on_hold(api):
+    api.set_orders("hosta", [VLM])
+    api.hold_gpu("hostb-gpu", "owner")
+    report(api, "hosta", "tok-a", [{"name": "vlm", "instances_running": 1}])
+    api.skew = 61  # the 60 s drain timeout passes; the consumer still reports running
+    report(api, "hosta", "tok-a", [{"name": "vlm", "instances_running": 1}])
+    (h,) = holds(api, "hosta", "tok-a")
+    assert h["phase"] == "free"  # the consumer's orders stay "on hold" (it's in the list); it shows as a blocker
+
+
+def test_a_silent_consumer_host_does_not_block_the_drain(api):
+    api.set_orders("hosta", [VLM])
+    api.hold_gpu("hostb-gpu", "owner")
+    report(api, "hosta", "tok-a", [{"name": "vlm", "instances_running": 1}])
+    api.skew = 61
+    report(api, "hostb", "tok-b")  # any report re-evaluates; hosta has been silent for 60 s
+    assert holds(api, "hostb", "tok-b")[0]["phase"] == "free"
+
+
+def test_release_resumes_then_clears_when_the_owner_is_active(api):
+    api.set_orders("hosta", [VLM])
+    api.hold_gpu("hostb-gpu", "owner")
+    report(api, "hosta", "tok-a", [{"name": "vlm", "instances_running": 0}])
+    assert api.release_gpu("hostb-gpu")
+    assert holds(api, "hosta", "tok-a")[0]["phase"] == "resume"  # consumers stay stopped until the owner is back
+    report(api, "hostb", "tok-b", gpus=[{"gpu": "hostb-gpu", "hold": "resuming", "blockers": []}])
+    assert holds(api, "hosta", "tok-a")[0]["phase"] == "resume"
+    report(api, "hostb", "tok-b", gpus=[{"gpu": "hostb-gpu", "hold": "active", "blockers": []}])
+    assert holds(api, "hosta", "tok-a") == []  # removed: the consumers start again by themselves
+
+
+def test_release_without_a_container_hold_is_false(api):
+    """A dashboard release only clears the container's own hold; a local hold is released on the host itself."""
+    assert api.release_gpu("hostb-gpu") is False

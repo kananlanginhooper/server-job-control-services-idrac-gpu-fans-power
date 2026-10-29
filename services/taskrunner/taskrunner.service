@@ -6,6 +6,8 @@ Wants=network-online.target postgresql.service
 
 [Service]
 User=svc
+# the shared settings file (install.sh fills in the clone's path)
+Environment=SERVICES_ENV_FILE=/path/to/repo/.env
 ExecStart=/usr/bin/python3 -B /opt/taskrunner/taskrunner.py
 Restart=always
 RestartSec=10

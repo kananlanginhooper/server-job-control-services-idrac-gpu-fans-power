@@ -1,0 +1,10 @@
+# Add on servers with an NVIDIA GPU (needs nvidia-container-toolkit): COMPOSE_FILE=compose.yaml:compose.gpu.yaml
+services:
+  agent:
+    environment:
+      SJC_NVIDIA_SMI: nvidia-smi
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: all, capabilities: [gpu, utility] }]

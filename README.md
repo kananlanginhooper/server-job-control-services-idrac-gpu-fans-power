@@ -30,6 +30,9 @@ The dashboard UI and its API live in a separate repo, `server-job-control-dashbo
 | [`ssd-write-cache`](services/ssd-write-cache/) | hub | Boot: turns on the drive write cache for the listed data SSDs, matched by serial |
 | [`taskrunner`](services/taskrunner/) | every server | The one job service per server. Runs task rows from a local Postgres `tasks` table, sizes them to the power target, status on :8098, CLI `taskctl` |
 | [`tools/task-report.py`](services/tools/) | anywhere | CLI: post one task to the dashboard's Tasks table |
+| [`sjc-agent`](services/sjc-agent/) | every server (Docker) | Publishes the server's BMC sensors, DCMI power, GPU, fan-control and run-level state and system metrics to MQTT. Runs `fans` / `gpu_limit` commands, refused while fan-control owns them, with a manual-hold lease and a hand-back to Dell auto at Emergency temperature. Built on [`lib/sjc_hw`](lib/sjc_hw/) |
+
+**MQTT topic contract:** [`contracts/mqtt-topics.md`](contracts/mqtt-topics.md) (+ `.json`) is the one source of truth for the topics between `sjc-agent` and the dashboard backend. The dashboard repo references it pinned to a commit and doesn't keep a copy.
 
 **Not here** (lives elsewhere): the dashboard API and UI; Ollama itself (stock units); the ssh tunnels to the GPU desktop; and the LLM job queue, which is in the copilot-history project and is woken by `power-hooks/copilot.sh`.
 

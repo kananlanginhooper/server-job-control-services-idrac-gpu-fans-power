@@ -98,3 +98,10 @@ def test_shell_loader_matches_the_python_one(tmp_path):
         timeout=30,
     ).stdout.split("\n")
     assert out[:4] == ["gpu-server", "hub", "a=1 b=2", "dflt"]
+
+
+def test_env_example_lists_every_setting_the_code_reads():
+    """DEV-STANDARD section 2: .env.example shows every key (KEY=, # KEY= or # <HOST>_KEY=); new keys go in the same commit."""
+    chk = load("scripts/check-env-example.py", "check_env_example")
+    gone = chk.missing()
+    assert not gone, "add to .env.example: " + ", ".join(f"{k} ({', '.join(sorted(v))})" for k, v in sorted(gone.items()))

@@ -1,0 +1,7 @@
+[Unit]
+Description=GPU watchdog: rescan, then restart (capped) if the GPU drops off the bus
+After=gpu-init.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash @REPO@/services/gpu-watchdog/gpu-watchdog.sh

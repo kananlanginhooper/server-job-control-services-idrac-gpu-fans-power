@@ -1,0 +1,14 @@
+[Unit]
+Description=Dashboard agent on :8091: CPU/RAM/disk/NIC/RAPL/GPU/IPMI stats, run-profile power hooks, RAPL caps
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=/dev/shm
+ExecStart=/usr/bin/python3 -B @REPO@/services/dash-agent/dash-agent.py 8091 all
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

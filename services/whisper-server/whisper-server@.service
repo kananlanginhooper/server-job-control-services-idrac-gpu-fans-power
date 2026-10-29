@@ -1,0 +1,14 @@
+[Unit]
+Description=Whisper transcription worker on port %i (stateless HTTP POST /transcribe)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=@USER@
+# needs a venv with faster-whisper; WHISPER_PYTHON in the repo .env points at its python
+ExecStart=/bin/bash -c '. @REPO@/lib/svcenv.sh; exec $(svc_env WHISPER_PYTHON python3) @REPO@/services/whisper-server/whisper_server.py %i 10'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

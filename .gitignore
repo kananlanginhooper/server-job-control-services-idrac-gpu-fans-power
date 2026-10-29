@@ -1,0 +1,4 @@
+.env
+private/
+snapshot-*/
+__pycache__/

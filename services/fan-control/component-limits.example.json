@@ -1,0 +1,130 @@
+{
+ "version": 21,
+ "updated": "2026-09-28T18:30",
+ "owner": "Adaptive Run Mode session",
+ "doc": "<doc> (the source of every value; edit there first)",
+ "note": "v6 (2026-09-27 14:05): yellow = the TARGET temperature Adaptive aims for; red = yellow + 1; Emergency = yellow + 2 (its own category, handled by the Emergency path and shown only as the pop-up), clearing at yellow (the owner: \"Emergency clears at yellow, not green\"). Kinds without Emergency (CPU: throttles itself) use tune = [yellow, yellow - 1]. Inlet is informational only. hosts.<host>.<kind> overrides any field. Sources: server-component-thermal-catalog.md. \"fans\": false = display only (2026-09-28: inlet, CPU and pkg are shown and coloured but never set fan speed). \"aim\" on a kind sets the fan-control aim directly (cpu: hub 98, GPU server 85).",
+ "kinds": {
+  "cpu": {
+   "label": "CPU package (coretemp / iDRAC CPU)",
+   "yellow": 98,
+   "red": 99,
+   "emergency": null,
+   "self_throttles": true,
+   "detail": "hub Xeon E5-2690 v4: yellow 98 / red 99 (display; +2 from 96/97, 2026-09-28). Fan aim 98°C (2026-09-28: \"add back CPU to the fan control, maybe just with a higher setting\"); measured throttling starts at about 100°C (package 1 throttled 11% of the time at 100–102°C while display-only). TjMax 103. No Emergency.",
+   "tune": [
+    98,
+    97
+   ],
+   "aim": 98
+  },
+  "gpu": {
+   "label": "GPU (RTX 2080 Ti)",
+   "yellow": 90,
+   "red": 91,
+   "emergency": [
+    92,
+    90
+   ],
+   "detail": "RTX 2080 Ti (Dell OEM). Yellow 90 / red 91 / Emergency 92 (clears at 90); control aim 89 (2026-09-27: yellow 87 was reverted because the GPU's aim is what pulls in the case fans). Card fan 100% while busy (a 90% test throttled at 88°C); spike guard at aim + 1 (90°C) or a firmware reading > 100%.",
+   "aim": 89
+  },
+  "nvme": {
+   "label": "NVMe SSD",
+   "yellow": 78,
+   "red": 79,
+   "emergency": [
+    80,
+    78
+   ],
+   "detail": "Samsung 990 PRO warns at 82°C (throttles); Acer N3500 at 90°C. The stricter 990 PRO value is used for both."
+  },
+  "ssd": {
+   "label": "WD Red SA500 SATA SSD",
+   "yellow": 70,
+   "red": 71,
+   "emergency": [
+    72,
+    70
+   ],
+   "detail": "WD Red SA500 4 TB. Max 70°C (the owner's research and WD's datasheet; the drive's SMART says 65). 70 is yellow, 71 red."
+  },
+  "hdd": {
+   "label": "WD181KRYZ 18 TB HDD",
+   "yellow": 56,
+   "red": 57,
+   "emergency": [
+    58,
+    56
+   ],
+   "detail": "WD 18 TB (WD181KRYZ). Rated 5–60°C. Recovery evidence."
+  },
+  "toshiba": {
+   "label": "Toshiba MG03SCA400 SAS HDD",
+   "yellow": 47,
+   "red": 48,
+   "emergency": [
+    49,
+    47
+   ],
+   "detail": "Toshiba MG03SCA400 SAS. Rated 5–55°C; the drive trips at 50°C. Degraded RAID 5: the most fragile disks. Yellow 47 / red 48 / Emergency 49 (clears at 47): +1°C for all profiles (2026-09-28, so the drive bays hold Adaptive's fans lower); Emergency now sits 1°C under the 50°C trip."
+  },
+  "exhaust": {
+   "label": "Exhaust (iDRAC)",
+   "yellow": 62,
+   "red": 63,
+   "emergency": [
+    63,
+    62
+   ],
+   "detail": "Air leaving the chassis; proxy for unsensed rear parts. No Dell exhaust spec; iDRAC warning 70 / critical 75. Yellow 62 / red 63 / Emergency 63 (clears at 62), fan aim 61 (2026-09-28 15:30).",
+   "aim": 61
+  },
+  "inlet": {
+   "label": "Inlet (iDRAC)",
+   "yellow": 35,
+   "red": 36,
+   "emergency": null,
+   "detail": "Room air in. Informational only: fans can't lower it. Yellow at 35°C, red from 36°C on both servers (2026-09-27: this room runs this warm; Dell's 35°C, and 30°C for the GPU server with a GPU, are noted but not enforced).",
+   "fans": false
+  },
+  "ipmi_other": {
+   "label": "Other iDRAC temperature",
+   "yellow": 60,
+   "red": 75,
+   "emergency": null,
+   "detail": "Other iDRAC temperature sensor."
+  },
+  "gpu_fan_pct": {
+   "label": "GPU card fan, % of full speed",
+   "yellow": 98,
+   "red": null,
+   "emergency": null,
+   "detail": "Card fan, % of 6,030 rpm. Over 100% means the firmware is overriding: the card is too hot."
+  },
+  "raid": {
+   "label": "RAID controller chip (PERC ROC)",
+   "yellow": 95,
+   "red": 96,
+   "emergency": [
+    97,
+    95
+   ],
+   "detail": "PERC H730 (hub, LSI SAS3108) / H710 Mini (GPU server, SAS2208), read with perccli every 60 s. LSI/Intel: the ROC is designed to run below 105°C, throttles at 110, stops I/O at 116. Yellow 95 leaves margin (the hub controller faulted 2026-09-27)."
+  }
+ },
+ "hosts": {
+  "gpu-server": {
+   "cpu": {
+    "yellow": 85,
+    "red": 86,
+    "tune": [
+     85,
+     84
+    ],
+    "detail": "GPU server Xeon E5-2695 v2: yellow 85 / red 86 (display; +2 from 83/84, 2026-09-28). Fan aim 85°C, 2°C under TjMax 87 (2026-09-28). No Emergency.",
+    "aim": 85
+   }
+  }
+ }
+}

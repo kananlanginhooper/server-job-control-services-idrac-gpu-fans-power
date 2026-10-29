@@ -1,0 +1,5 @@
+# GPU desktop: Intel 8265 firmware crashed every 15-25 s on home-ap (NMI_INTERRUPT_LMAC_FATAL, 2026-10-26)
+# 2026-10-27: tried 11n_disable=12 (RX aggregation off): crashed every ~12 s, reverted to 8
+# 2026-10-27: option loop run 4: disable_11ac=1 gave 0 crashes and 200 Mbit/s (others 9-22), made permanent
+options iwlwifi 11n_disable=8 swcrypto=1 disable_11ac=1
+options iwlmvm power_scheme=1

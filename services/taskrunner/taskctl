@@ -1,0 +1,96 @@
+#!/usr/bin/python3
+# taskctl - edit and inspect this server's task table (template, same on hub / GPU server / GPU desktop). Changes are picked up by
+# taskrunner.service within ~5 s.
+#   taskctl list                          tasks + live state (from the runner's status page)
+#   taskctl add NAME --cmd 'CMD' [--workdir D] [--env K=V ...] [--kind continuous|schedule|oneshot] [--instances N]
+#                    [--every SECS] [--need-path P ...] [--need-http URL ...] [--gpu] [--nice N] [--desc TEXT] [--disabled]
+#   taskctl set NAME [--instances N] [--cmd ...] [--every SECS] [--nice N] [--desc TEXT]
+#   taskctl enable NAME | disable NAME | rm NAME
+#   taskctl runs NAME [N]                 last N runs (default 10)
+#   taskctl log NAME [INSTANCE] [LINES]   tail of the task's log
+import argparse, json, os, subprocess, sys, urllib.request
+import psycopg
+
+DSN = os.environ.get("TASKRUNNER_DSN", "dbname=taskrunner")
+LOG_DIR = os.environ.get("TASKRUNNER_LOGS", os.path.expanduser("~/taskrunner/logs"))
+PORT = int(os.environ.get("TASKRUNNER_PORT", "8098"))
+
+
+def db():
+    return psycopg.connect(DSN, autocommit=True)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="taskctl")
+    sp = ap.add_subparsers(dest="cmd", required=True)
+    sp.add_parser("list")
+    for name in ("add", "set"):
+        a = sp.add_parser(name)
+        a.add_argument("name")
+        a.add_argument("--cmd", dest="command", required=(name == "add"))
+        a.add_argument("--workdir"); a.add_argument("--env", action="append", default=[])
+        a.add_argument("--kind", choices=("continuous", "schedule", "oneshot"))
+        a.add_argument("--instances", type=int); a.add_argument("--every", type=int)
+        a.add_argument("--need-path", action="append", default=[]); a.add_argument("--need-http", action="append", default=[])
+        a.add_argument("--gpu", action="store_true"); a.add_argument("--nice", type=int); a.add_argument("--desc")
+        a.add_argument("--disabled", action="store_true")
+    for name in ("enable", "disable", "rm"):
+        sp.add_parser(name).add_argument("name")
+    r = sp.add_parser("runs"); r.add_argument("name"); r.add_argument("n", nargs="?", type=int, default=10)
+    lg = sp.add_parser("log"); lg.add_argument("name"); lg.add_argument("instance", nargs="?", default="0")
+    lg.add_argument("lines", nargs="?", default="40")
+    a = ap.parse_args()
+
+    if a.cmd == "list":
+        try:
+            st = json.load(urllib.request.urlopen(f"http://127.0.0.1:{PORT}/", timeout=5))
+        except Exception as e:
+            sys.exit(f"runner status page not answering ({e}); is taskrunner.service running?")
+        print(f"{'task':28} {'kind':10} {'on':3} {'run/want':9} state")
+        for t in st["tasks"]:
+            states = sorted(set(t["state"].values())) or ["-"]
+            want = t["instances"] if t["kind"] == "continuous" else 1
+            print(f"{t['name']:28} {t['kind']:10} {'y' if t['enabled'] else 'n':3} {str(t['running']) + '/' + str(want):9} {'; '.join(states)}")
+        return
+    c = db()
+    if a.cmd in ("add", "set"):
+        f = {}
+        for k in ("command", "workdir", "kind", "instances", "nice"):
+            if getattr(a, k) is not None:
+                f[k] = getattr(a, k)
+        if a.every is not None:
+            f["every_secs"] = a.every
+        if a.desc is not None:
+            f["description"] = a.desc
+        if a.env:
+            f["env"] = json.dumps(dict(e.split("=", 1) for e in a.env))
+        needs = {}
+        if a.need_path: needs["paths"] = a.need_path
+        if a.need_http: needs["http"] = a.need_http
+        if a.gpu: needs["gpu"] = True
+        if needs:
+            f["needs"] = json.dumps(needs)
+        if a.cmd == "add":
+            f["name"] = a.name; f["enabled"] = not a.disabled
+            cols = ", ".join(f); ph = ", ".join(["%s"] * len(f))
+            c.execute(f"insert into tasks({cols}) values({ph})", list(f.values()))
+        else:
+            if not f:
+                sys.exit("nothing to change")
+            c.execute(f"update tasks set {', '.join(k + '=%s' for k in f)} where name=%s", list(f.values()) + [a.name])
+        print("ok")
+    elif a.cmd in ("enable", "disable"):
+        n = c.execute("update tasks set enabled=%s where name=%s", (a.cmd == "enable", a.name)).rowcount
+        print("ok" if n else "no such task")
+    elif a.cmd == "rm":
+        print("ok" if c.execute("delete from tasks where name=%s", (a.name,)).rowcount else "no such task")
+    elif a.cmd == "runs":
+        for r in c.execute("select instance, pid, started_at, ended_at, exit_code from task_runs where task=%s "
+                           "order by started_at desc limit %s", (a.name, a.n)):
+            print(*r)
+    elif a.cmd == "log":
+        subprocess.run(["tail", "-n", a.lines, f"{LOG_DIR}/{a.name}.{a.instance}.log"])
+
+
+if __name__ == "__main__":
+    main()

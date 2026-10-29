@@ -1,0 +1,12 @@
+[Unit]
+Description=GPU off switch: follows the dashboard's "Disable GPU" toggle (holds GPU jobs, stops Ollama)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 @REPO@/services/gpu-switch/gpu-switch.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -15,6 +15,8 @@
 # Processes are started in their own process group (TASK_NAME / TASK_INSTANCE in the environment) and stopped with SIGTERM,
 # then SIGKILL after `stop_secs`. Logs: <LOG_DIR>/<task>.<instance>.log, trimmed at 50 MB (one .1 kept).
 # Read-only status: http://<host>:8098/  (JSON: tasks + live processes). Changes go through the table (taskctl).
+from __future__ import annotations
+
 import json
 import os
 import signal
@@ -70,34 +72,34 @@ create trigger tasks_touch before update on tasks for each row
 """
 
 
-def log(msg):
+def log(msg: str) -> None:
     print(time.strftime("%F %T"), msg, flush=True)
 
 
 class Need:
     """Need checks run in a background thread; the main loop only reads the last result (a hung NFS path can't stall it)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.ok, self.why, self.lock, self.wanted = {}, {}, threading.Lock(), {}
         threading.Thread(target=self.loop, daemon=True).start()
 
-    def want(self, name, needs):
+    def want(self, name: str, needs: dict) -> None:
         with self.lock:
             self.wanted[name] = needs
 
-    def get(self, name):
+    def get(self, name: str) -> tuple[bool, str]:
         with self.lock:
             return self.ok.get(name, False), self.why.get(name, "checking")
 
     @staticmethod
-    def path_ok(p):
+    def path_ok(p: str) -> bool:
         try:
             return subprocess.run(["timeout", "15", "stat", "-t", p + "/."], capture_output=True).returncode == 0
         except Exception:
             return False
 
     @staticmethod
-    def http_ok(u):
+    def http_ok(u: str) -> bool:
         try:
             urllib.request.urlopen(u, timeout=5).read(64)
             return True
@@ -105,13 +107,13 @@ class Need:
             return False
 
     @staticmethod
-    def low_power():
+    def low_power() -> bool:
         try:
             return json.load(urllib.request.urlopen(POWER_URL, timeout=5)).get("scale") == "down"
         except Exception:
             return False  # power API unreachable: don't hold work back (the guard still trims)
 
-    def loop(self):
+    def loop(self) -> None:
         while True:
             with self.lock:
                 wanted = dict(self.wanted)
@@ -137,12 +139,12 @@ class Need:
 
 
 class Proc:
-    def __init__(self, task, inst, popen, run_id):
+    def __init__(self, task: str, inst: int, popen: subprocess.Popen, run_id: int | None) -> None:
         self.task, self.inst, self.p, self.run_id, self.t0, self.stopping = task, inst, popen, run_id, time.time(), None
 
 
 class Runner:
-    def __init__(self):
+    def __init__(self) -> None:
         os.makedirs(LOG_DIR, exist_ok=True)
         self.db = None
         self.procs = {}  # (task, inst) -> Proc
@@ -153,14 +155,14 @@ class Runner:
         self.state = {}  # (task, inst) -> short text for the status page
 
     # ---------- database ----------
-    def conn(self):
+    def conn(self) -> psycopg.Connection | None:
         if self.db is None or self.db.closed:
             self.db = psycopg.connect(DSN, autocommit=True)
             self.db.execute(SCHEMA)
             log("connected to the task database")
         return self.db
 
-    def q(self, sql, args=()):
+    def q(self, sql: str, args: tuple = ()) -> list[tuple] | None:
         try:
             cur = self.conn().execute(sql, args)
             return cur.fetchall() if cur.description else None
@@ -169,7 +171,7 @@ class Runner:
             self.db = None
             return None
 
-    def load(self):
+    def load(self) -> bool:
         rows = self.q(
             "select name, command, workdir, env, kind, instances, every_secs, needs, nice, stop_secs, enabled, "
             "extract(epoch from updated_at) from tasks"
@@ -203,7 +205,7 @@ class Runner:
         return True
 
     # ---------- processes ----------
-    def start(self, t, inst):
+    def start(self, t: dict, inst: int) -> None:
         key = (t["name"], inst)
         path = f"{LOG_DIR}/{t['name']}.{inst}.log"
         try:
@@ -239,7 +241,7 @@ class Runner:
             self.last_sched[t["name"]] = time.time()
         log(f"started {t['name']}.{inst} pid {p.pid}")
 
-    def stop(self, pr, why):
+    def stop(self, pr: Proc, why: str) -> None:
         if pr.stopping is None:
             pr.stopping = time.time()
             log(f"stopping {pr.task}.{pr.inst} ({why})")
@@ -253,12 +255,12 @@ class Runner:
             except ProcessLookupError:
                 pass
 
-    def fail(self, key):
+    def fail(self, key: tuple[str, int]) -> None:
         nxt, delay = self.backoff.get(key, (0, BACKOFF_MIN / 2))
         delay = min(BACKOFF_MAX, delay * 2)
         self.backoff[key] = (time.time() + delay, delay)
 
-    def reap(self):
+    def reap(self) -> None:
         for key, pr in list(self.procs.items()):
             rc = pr.p.poll()
             if rc is None:
@@ -279,7 +281,7 @@ class Runner:
                     (pr.task, t.get("updated", 0)),
                 )
 
-    def tick(self):
+    def tick(self) -> None:
         self.reap()
         if not self.load():
             return
@@ -315,7 +317,7 @@ class Runner:
             if not t or not t["enabled"] or key[1] >= (1 if t["kind"] != "continuous" else t["instances"]):
                 self.state.pop(key, None)
 
-    def status(self):
+    def status(self) -> dict:
         return {
             "host": HOST,
             "at": int(time.time()),
@@ -332,7 +334,7 @@ class Runner:
             ],
         }
 
-    def shutdown(self, *_):
+    def shutdown(self, *_: object) -> None:
         log("shutting down: stopping every task")
         for pr in self.procs.values():
             self.stop(pr, "runner stopping")
@@ -348,12 +350,12 @@ class Runner:
         sys.exit(0)
 
 
-def serve(runner):
+def serve(runner: Runner) -> None:
     class H(BaseHTTPRequestHandler):
-        def log_message(self, *a):
+        def log_message(self, *a: object) -> None:
             pass
 
-        def do_GET(self):
+        def do_GET(self) -> None:
             b = json.dumps(runner.status()).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

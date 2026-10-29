@@ -10,6 +10,7 @@ services:
     build: { context: ../.., dockerfile: services/sjc-agent/Dockerfile }
     restart: unless-stopped
     network_mode: host          # real NIC counters, reaches the broker on the LAN, and keeps the host's hostname
+    # (host networking on purpose, so it does not join the shared `homelab` bridge network; that rule is for bridged containers)
     pid: host
     devices: ["/dev/ipmi0:/dev/ipmi0"]   # in-band IPMI to this server's BMC
     env_file: ../../.env

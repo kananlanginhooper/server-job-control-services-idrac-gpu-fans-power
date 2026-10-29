@@ -7,6 +7,8 @@ Design for the three items still open after wall-clock schedules, power sizing a
 > - The **control API (section 3) is the container's API**, not a per-server one. Servers only pull: no inbound port, which also works through NAT.
 > - The runner becomes that agent: it syncs its `tasks` table from the container's orders and keeps running them when the container is down.
 >
+> **Never part of this:** power-guard, fan-control and gpu-switch, and wherever the run mode and power target live. They are the permanent core safety layer (owner, 2026-10-29): separate system services that never fold into the runner or agent and never depend on the container.
+>
 > The contract is [`contracts/agent-api.md`](../contracts/agent-api.md) (draft, being agreed with the container's owner). Section 1 (feeds) folds into the agent's `report` call. The rest of this file is kept for the reasoning.
 
 ## 1. Dashboard feeds (smallest; build first)
@@ -63,7 +65,7 @@ The status page (:8098) stays read-only and open on the LAN, as now. The new que
 - **Auth:**
   - a per-server bearer token in the shared `.env` (`<HOST>_TASKRUNNER_TOKEN`), checked with `hmac.compare_digest`;
   - workers and the dashboard backend hold the token, and browsers never see it.
-  - Later, the wrapper thread's OIDC provider can issue these tokens instead.
+  - Later, the IdP replaces these pre-shared keys (refresh tokens); the owner wants the server services and the container both behind it eventually.
 - **Server shape:** stdlib `ThreadingHTTPServer` as today, or FastAPI per [`refactor/fastapi-proposal.md`](refactor/fastapi-proposal.md) (taskrunner is on its "worth it" list). Either way the API runs in a thread of the runner and never blocks the loop.
 
 ## Order and risk

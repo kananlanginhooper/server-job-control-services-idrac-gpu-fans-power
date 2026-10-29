@@ -4,6 +4,8 @@
 # throughput from copilot_history.calls. Throughput is recomputed for the last 15 minutes each minute, because a
 # call is recorded when it finishes.   usage: gpu-perf.py            (service)
 #                                             gpu-perf.py --backfill <gpu-run-trace.csv>
+from __future__ import annotations
+
 import collections
 import json
 import os
@@ -41,7 +43,7 @@ THROUGHPUT = """update gpu_perf p join (
 )
 
 
-def db():
+def db() -> pymysql.connections.Connection:
     return pymysql.connect(
         host=env("RECOVERY_DB_HOST", "127.0.0.1"),
         port=int(env("RECOVERY_DB_PORT", 3306)),
@@ -53,7 +55,7 @@ def db():
     )
 
 
-def row(minute, samples):
+def row(minute: int, samples: list[dict]) -> tuple:
     modes = collections.Counter(s["mode"] for s in samples)
     n = len(samples)
     avg = lambda k: sum(s[k] for s in samples if s[k] is not None) / max(1, sum(1 for s in samples if s[k] is not None))
@@ -77,7 +79,7 @@ def row(minute, samples):
     )
 
 
-def backfill(path):
+def backfill(path: str) -> None:
     per = collections.defaultdict(list)
     for line in open(path):
         f = line.strip().split(",")
@@ -111,7 +113,7 @@ def backfill(path):
     print(f"backfilled {len(per)} minutes")
 
 
-def main():
+def main() -> None:
     c = db().cursor()
     c.execute(SCHEMA)
     for col in ("mem_used_mb", "mem_total_mb", "mem_bw_pct", "pcie_rx_mbs", "pcie_tx_mbs", "ram_read_mbs", "ram_write_mbs"):

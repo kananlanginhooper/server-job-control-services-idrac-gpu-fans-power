@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # RAM bandwidth from the Intel memory-controller (uncore IMC) CAS counters; 1 CAS = 64 bytes.
 # Run as root: sudo -n python3 imc-bw.py <out.json>. Writes {ts, read_bps, write_bps, sockets} every 5 s.
+from __future__ import annotations
+
 import ctypes
 import glob
 import json
@@ -16,12 +18,12 @@ libc = ctypes.CDLL(None, use_errno=True)
 NR_perf_event_open = 298
 
 
-def field(dev, name):
+def field(dev: str, name: str) -> str:
     with open(f"{dev}/{name}") as f:
         return f.read().strip()
 
 
-def encode(dev, event):
+def encode(dev: str, event: str) -> int:
     cfg = 0
     for part in field(dev, f"events/{event}").split(","):
         k, v = part.split("=")
@@ -31,7 +33,7 @@ def encode(dev, event):
     return cfg
 
 
-def open_counter(ptype, config, cpu):
+def open_counter(ptype: int, config: int, cpu: int) -> int:
     attr = struct.pack("IIQQQQQII", ptype, 64, config, 0, 0, 0, 0, 0, 0) + b"\0" * 8
     buf = ctypes.create_string_buffer(attr, 64)
     fd = libc.syscall(NR_perf_event_open, buf, -1, cpu, -1, 0)
@@ -40,7 +42,7 @@ def open_counter(ptype, config, cpu):
     return fd
 
 
-def main():
+def main() -> None:
     counters = []
     for dev in sorted(glob.glob("/sys/bus/event_source/devices/uncore_imc_*")):
         ptype = int(field(dev, "type"))

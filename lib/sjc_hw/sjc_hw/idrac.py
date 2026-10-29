@@ -6,7 +6,9 @@ Readings parse `ipmitool sdr type <X>` lines:  name | id | status | entity | val
 from __future__ import annotations
 
 import re
+import subprocess
 import time
+from collections.abc import Iterator
 
 from .config import settings
 from .shell import run
@@ -14,7 +16,7 @@ from .shell import run
 CPU_ENTITY = {"3.1": "CPU1", "3.2": "CPU2"}  # Dell names both CPU sensors "Temp"; the entity id tells them apart
 
 
-def ipmi(*args: str, timeout: float = 20):
+def ipmi(*args: str, timeout: float = 20) -> subprocess.CompletedProcess:
     return run(settings.ipmitool + list(args), timeout=timeout)
 
 
@@ -27,7 +29,7 @@ def sdr(typ: str) -> str:
     return r.stdout
 
 
-def _rows(txt: str):
+def _rows(txt: str) -> Iterator[list[str]]:
     for line in txt.splitlines():
         f = [x.strip() for x in line.split("|")]
         if len(f) >= 5:

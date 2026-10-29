@@ -3,6 +3,8 @@
 # sub-second spikes that the dashboard's 1-per-second DCMI polling misses (2026-09-28: "peak usage is larger than the
 # graph shows"). Every WINDOW s: read the peak since the last reset, then reset it. Writes {ts, peak_w, peak_at, window_s}.
 # Run as root: peak-power.py <out.json> [ipmitool command...]
+from __future__ import annotations
+
 import json, os, re, subprocess, sys, time
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/dev/shm/peak-power.json"
@@ -10,11 +12,11 @@ IPMI = sys.argv[2:] or ["ipmitool"]
 WINDOW = 30
 
 
-def run(*args):
+def run(*args: str) -> str:
     return subprocess.run(IPMI + list(args), capture_output=True, text=True, timeout=30).stdout
 
 
-def peak():
+def peak() -> tuple[int | None, str | None]:
     out = run("delloem", "powermonitor")
     m = re.search(r"System Peak Power.*?Peak Time\s*:\s*(.+?)\s*Peak Reading\s*:\s*(\d+)\s*W", out, re.S)
     return (int(m.group(2)), m.group(1).strip()) if m else (None, None)

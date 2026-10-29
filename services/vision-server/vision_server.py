@@ -7,6 +7,8 @@
 #                 Every CLIP embedding is also kept in store/clip-*.npz for /search.
 #   GET  /search?q=dog+on+a+beach&k=50   -> [[hash, score], ...] over every stored embedding (counts/hashes only, no content)
 #   GET  /health
+from __future__ import annotations
+
 import base64
 import glob
 import io
@@ -124,7 +126,7 @@ os.makedirs(STORE, exist_ok=True)
 _index = {"files": None, "hashes": None, "emb": None}
 
 
-def prep(raw, faces):
+def prep(raw: bytes, faces: list) -> tuple:
     """decode once on the CPU: CLIP tensor + aligned 112x112 face crops"""
     try:
         im = Image.open(io.BytesIO(raw))
@@ -146,7 +148,7 @@ def prep(raw, faces):
         return None, [], str(e)[:200]
 
 
-def embed(header, body):
+def embed(header: dict, body: bytes) -> dict:
     items, off, raws = header["items"], 0, []
     for it in items:
         raws.append(body[off : off + it["len"]])
@@ -179,7 +181,7 @@ def embed(header, body):
     return out
 
 
-def index():
+def index() -> tuple:
     files = sorted(glob.glob(f"{STORE}/clip-*.npz"))
     if files != _index["files"]:
         hs, es = [], []
@@ -195,7 +197,7 @@ def index():
     return _index["hashes"], _index["emb"]
 
 
-def search(q, k):
+def search(q: str, k: int) -> list:
     with GPU, torch.no_grad():
         hs, emb = index()
         if emb is None:
@@ -212,10 +214,10 @@ def search(q, k):
 
 
 class H(BaseHTTPRequestHandler):
-    def log_message(self, *a):
+    def log_message(self, *a: object) -> None:
         pass
 
-    def send(self, obj, code=200):
+    def send(self, obj: object, code: int = 200) -> None:
         b = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -223,7 +225,7 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         u = urlparse(self.path)
         if u.path == "/health":
             return self.send({"ok": True, "tags": len(TAGS), "stored": len(glob.glob(f"{STORE}/clip-*.npz"))})
@@ -232,7 +234,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(search(q.get("q", [""])[0], int(q.get("k", ["50"])[0])))
         self.send({"err": "not found"}, 404)
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         if self.path != "/embed":
             return self.send({"err": "not found"}, 404)
         body = self.rfile.read(int(self.headers["Content-Length"]))

@@ -4,6 +4,8 @@
 # No database access and no files kept: the hub claims videos, extracts audio, sends it here and writes the results to MySQL.
 # One model per process, one request at a time; systemd runs several instances (whisper-srv@PORT). Listens on the 10 Gb
 # link address only. Privacy: never logs transcript text (counts and timings only).
+from __future__ import annotations
+
 import json
 import os
 import sys
@@ -33,7 +35,7 @@ MODEL = WhisperModel(
 POWER_STATE = "/dev/shm/power-hooks/state.json"
 
 
-def gpu_low_power():
+def gpu_low_power() -> bool:
     """GPU jobs honour Low Power / Meeting (the owner 09-28): while scale=down the request waits instead of failing
     (a 503 would be recorded as a transcription error by the hub client)."""
     if DEVICE != "cuda":
@@ -51,7 +53,7 @@ FEED = f"/dev/shm/gpu-job.whisper-gpu-{PORT}.json"
 DONE = []  # completion times
 
 
-def feed_loop():
+def feed_loop() -> None:
     while True:
         now = time.time()
         recent = [t for t in DONE if now - t <= 600]
@@ -75,15 +77,15 @@ def feed_loop():
 
 
 class H(BaseHTTPRequestHandler):
-    def log_message(self, *a):
+    def log_message(self, *a: object) -> None:
         pass
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"ok")
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         if self.path != "/transcribe":
             self.send_response(404)
             self.end_headers()

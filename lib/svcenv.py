@@ -8,16 +8,19 @@ Lookup order for env("NAME"):
 Adding a server is a config change: give it its own <HOST>_ keys where it differs from the shared ones.
 """
 
+from __future__ import annotations
+
 import os
 import re
 import socket
+from typing import Any
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 ENV_FILE = os.environ.get("SERVICES_ENV_FILE", os.path.join(ROOT, ".env"))
 HOST = re.sub(r"[^A-Z0-9]", "_", socket.gethostname().split(".")[0].upper())
 
 
-def _read(path):
+def _read(path: str) -> dict[str, str]:
     vals = {}
     try:
         with open(path, encoding="utf-8") as f:
@@ -38,7 +41,7 @@ def _read(path):
 FILE = _read(ENV_FILE)
 
 
-def env(name, default=None):
+def env(name: str, default: Any = None) -> Any:
     for key in (f"{HOST}_{name}", name):
         for src in (os.environ, FILE):
             v = src.get(key)
@@ -47,5 +50,5 @@ def env(name, default=None):
     return default
 
 
-def env_int(name, default):
+def env_int(name: str, default: int | str) -> int:
     return int(env(name, default))

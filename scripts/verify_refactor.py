@@ -7,6 +7,8 @@ and `from __future__ import annotations`. Anything else that differs is printed.
    --strict: files that must be IDENTICAL apart from the ignored parts (the live controllers)
 """
 
+from __future__ import annotations
+
 import ast
 import subprocess
 import sys
@@ -32,7 +34,7 @@ def normalize(src: str) -> str:
     tree.body = [n for n in tree.body if not (isinstance(n, ast.ImportFrom) and n.module == "__future__")]
 
     class Ann(ast.NodeTransformer):
-        def visit_AnnAssign(self, n):  # x: int = 1  ->  x = 1 ;  bare "x: int" -> removed
+        def visit_AnnAssign(self, n: ast.AnnAssign) -> ast.AST | None:  # x: int = 1  ->  x = 1 ;  bare "x: int" -> removed
             if n.value is None:
                 return None
             return ast.copy_location(ast.Assign(targets=[n.target], value=n.value), n)
@@ -41,7 +43,7 @@ def normalize(src: str) -> str:
     return ast.dump(tree, include_attributes=False)
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     ref = argv[0] if argv and not argv[0].startswith("--") else "main"
     strict = set(argv[argv.index("--strict") + 1 :]) if "--strict" in argv else set()
     files = subprocess.run(

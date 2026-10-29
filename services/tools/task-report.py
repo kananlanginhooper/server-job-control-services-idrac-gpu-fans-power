@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -14,7 +16,7 @@ URL = env("HUB_API_URL", "http://localhost:8090") + "/api/tasks"
 UNITS = {"": 1, "K": 1e3, "M": 1e6, "G": 1e9, "T": 1e12}
 
 
-def number(v):
+def number(v: str) -> float:
     m = re.fullmatch(r"([\d.,]+)\s*([KMGT]?)i?B?(?:/s)?", str(v).strip(), re.I)
     if not m:
         raise argparse.ArgumentTypeError(f"not a number: {v}")

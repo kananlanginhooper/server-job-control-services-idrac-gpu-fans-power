@@ -43,7 +43,7 @@ KEYS = [
 ]
 
 
-def _num(v: str):
+def _num(v: str) -> float | None:
     try:
         return float(v)
     except ValueError:

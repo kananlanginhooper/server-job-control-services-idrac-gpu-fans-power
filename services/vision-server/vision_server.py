@@ -1,4 +1,4 @@
-#!/opt/GPU desktop-runtime/vision/venv/bin/python
+#!/usr/bin/env python3
 # GPU desktop desktop GPU vision service (2026-10-27: CLIP tags + phrase search "do them"; face fingerprints clustered into same-person
 # groups, "tags only"). Listens on 127.0.0.1:8760 only; the hub reaches it through its user unit GPU desktop-vision-tunnel (:11436).
 #   POST /embed   binary: 4-byte big-endian header length, JSON header {"items": [{"hash", "len", "faces": [[10 landmarks], ...]}]},

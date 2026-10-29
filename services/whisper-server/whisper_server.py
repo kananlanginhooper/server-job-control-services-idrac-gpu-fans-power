@@ -1,4 +1,4 @@
-#!/opt/GPU server-runtime/whisper/venv/bin/python
+#!/usr/bin/env python3
 # GPU server transcription worker for the video pipeline (2026-09-30, the owner: "set up whisper on GPU server" - use the GPU server's idle CPU).
 # Stateless: POST a 16 kHz mono WAV to /transcribe, get {language, lang_prob, duration, segments:[{s,e,t}]} back.
 # No database access and no files kept: the hub claims videos, extracts audio, sends it here and writes the results to MySQL.

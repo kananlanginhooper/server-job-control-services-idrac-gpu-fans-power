@@ -105,3 +105,17 @@ def test_env_example_lists_every_setting_the_code_reads():
     chk = load("scripts/check-env-example.py", "check_env_example")
     gone = chk.missing()
     assert not gone, "add to .env.example: " + ", ".join(f"{k} ({', '.join(sorted(v))})" for k, v in sorted(gone.items()))
+
+
+def test_show_env_value_prints_one_key_and_refuses_secrets(tmp_path):
+    envf = tmp_path / "x.env"
+    envf.write_text("SJC_SCALER_DIR=/some/dir\nRECOVERY_DB_PASSWORD=hunter2\n")
+    run = lambda *a: subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "show-env.py"), "--value", *a],
+        env=dict(os.environ, SERVICES_ENV_FILE=str(envf)), capture_output=True, text=True, timeout=30,
+    )  # fmt: skip
+    r = run("SJC_SCALER_DIR")
+    assert r.returncode == 0 and r.stdout.strip() == "/some/dir"
+    r = run("RECOVERY_DB_PASSWORD")
+    assert r.returncode != 0 and "hunter2" not in r.stdout + r.stderr
+    assert run("NOPE_NOT_SET").returncode != 0

@@ -1,0 +1,8 @@
+# Add on the hub only: the power scaler's state folder, read-only, for the agent's runlevel topic (SJC_SCALER_STATE).
+# Compose can't read the per-host key from the shared .env, so export it first:
+#   export SJC_SCALER_DIR=$(cd ../.. && python3 scripts/show-env.py --value SJC_SCALER_DIR)
+#   docker compose -f compose.yaml -f compose.hub.yaml up -d --build
+services:
+  agent:
+    volumes:
+      - ${SJC_SCALER_DIR:?export SJC_SCALER_DIR first (see the top of this file)}:/host/scaler:ro

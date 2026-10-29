@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Print what a server will resolve from the shared .env, for every key the services use (secrets masked).
-usage: python scripts/show-env.py <HOSTNAME>   (e.g. the short hostname of the server you're about to cut over)"""
+usage: python scripts/show-env.py <HOSTNAME>   (e.g. the short hostname of the server you're about to cut over)
+       python scripts/show-env.py --value KEY  (just this server's value of one non-secret key, e.g. for compose)"""
 
 import os
 import re
@@ -10,6 +11,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 import svcenv  # noqa: E402
 
+if sys.argv[1:2] == ["--value"]:
+    key = sys.argv[2]
+    if re.search(r"PASSWORD|SECRET|TOKEN", key):
+        sys.exit(f"{key} is a secret; read it from the .env directly where it's needed")
+    v = svcenv.env(key)
+    if v is None:
+        sys.exit(f"{key} is not set for {svcenv.HOST}")
+    print(v)
+    sys.exit(0)
 if len(sys.argv) > 1:
     svcenv.HOST = re.sub(r"[^A-Z0-9]", "_", sys.argv[1].split(".")[0].upper())
 keys = set()

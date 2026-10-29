@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import ctypes, glob, json, os, re, subprocess, sys, threading, time
 
 sys.path.insert(0, "/dev/shm/pylib")
@@ -40,7 +42,7 @@ HEALTH_EVERY = 600
 lock = threading.Lock()
 
 
-def read(p, default=""):
+def read(p: str, default: str = "") -> str:
     try:
         with open(p) as f:
             return f.read().strip()
@@ -48,12 +50,12 @@ def read(p, default=""):
         return default
 
 
-def cpu_times():
+def cpu_times() -> tuple[int, int]:
     v = [int(x) for x in read("/proc/stat").splitlines()[0].split()[1:]]
     return sum(v), v[3] + v[4]
 
 
-def diskstats():
+def diskstats() -> dict:
     out = {}
     for line in read("/proc/diskstats").splitlines():
         f = line.split()
@@ -62,13 +64,13 @@ def diskstats():
     return out
 
 
-def nics():
+def nics() -> list[str]:
     if NIC != "all":
         return NIC.split(",")
     return sorted(n for n in os.listdir("/sys/class/net") if os.path.exists(f"/sys/class/net/{n}/device"))
 
 
-def netbytes():
+def netbytes() -> tuple[int, int]:
     rx = tx = 0
     for n in nics():
         b = f"/sys/class/net/{n}/statistics/"
@@ -77,7 +79,7 @@ def netbytes():
     return rx, tx
 
 
-def nic_info():
+def nic_info() -> dict:
     out = {}
     for n in nics():
         if read(f"/sys/class/net/{n}/operstate") == "up":
@@ -90,7 +92,7 @@ def nic_info():
     return out
 
 
-def mounts():
+def mounts() -> list:
     opts = {l.split()[1]: l.split()[3] for l in read("/proc/mounts").splitlines()}
     out = []
     for m in MOUNTS:
@@ -104,7 +106,7 @@ def mounts():
     return out
 
 
-def temps():
+def temps() -> dict:
     out = {}
     for h in glob.glob("/sys/class/hwmon/hwmon*"):
         vals = [int(read(t, "0")) / 1000 for t in glob.glob(h + "/temp*_input")]
@@ -120,7 +122,7 @@ class NvFan(ctypes.Structure):
     _fields_ = [("version", ctypes.c_uint), ("fan", ctypes.c_uint), ("speed", ctypes.c_uint)]
 
 
-def gpu_fan_rpm():
+def gpu_fan_rpm() -> float | None:
     try:
         if nvml["lib"] is None:
             lib = ctypes.CDLL("libnvidia-ml.so.1")
@@ -136,7 +138,7 @@ def gpu_fan_rpm():
         return None
 
 
-def gpu_pcie():
+def gpu_pcie() -> dict:
     try:
         if nvml["lib"] is None:
             gpu_fan_rpm()
@@ -161,7 +163,7 @@ def gpu_pcie():
         return {}
 
 
-def gpu_temp_nvml():
+def gpu_temp_nvml() -> float | None:
     try:
         if nvml["lib"] is None:
             gpu_fan_rpm()
@@ -173,7 +175,7 @@ def gpu_temp_nvml():
         return None
 
 
-def gpu():
+def gpu() -> dict | None:
     try:
         r = subprocess.run(
             [
@@ -204,7 +206,7 @@ def gpu():
         return None
 
 
-def edac():
+def edac() -> dict:
     ce = ue = 0
     for m in glob.glob("/sys/devices/system/edac/mc/mc*"):
         ce += int(read(m + "/ce_count", "0"))
@@ -212,7 +214,7 @@ def edac():
     return {"ce": ce, "ue": ue}
 
 
-def processes():
+def processes() -> tuple:
     r = subprocess.run(["ps", "-eo", "pid,etimes,stat,pcpu,args", "--no-headers"], capture_output=True, text=True).stdout
     out, dstate = {}, 0
     for line in r.splitlines():
@@ -238,7 +240,7 @@ KERR = re.compile(
 )
 
 
-def smart_parse(j, host, dev, rc):
+def smart_parse(j: dict, host: str, dev: str, rc: int) -> dict:
     temp = j.get("temperature") or {}
     d = {
         "host": host,
@@ -280,7 +282,7 @@ def smart_parse(j, host, dev, rc):
     return d
 
 
-def smart_run(cmd, host, dev):
+def smart_run(cmd: list[str], host: str, dev: str) -> dict:
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=40)
         return smart_parse(json.loads(r.stdout or "{}"), host, dev, r.returncode)
@@ -288,7 +290,7 @@ def smart_run(cmd, host, dev):
         return {"host": host, "dev": dev, "error": str(e)[:160]}
 
 
-def kernel_errors():
+def kernel_errors() -> dict | None:
     try:
         r = subprocess.run(
             ["sudo", "-n", "journalctl", "-k", "--since", "-1h", "-o", "cat", "--no-pager"],
@@ -307,7 +309,7 @@ def kernel_errors():
     return out
 
 
-def health_loop():
+def health_loop() -> None:
     while True:
         t0 = time.time()
         if not os.path.exists(SMARTCTL):
@@ -329,7 +331,7 @@ def health_loop():
         time.sleep(max(60, HEALTH_EVERY - (time.time() - t0)))
 
 
-def ipmi_sensors(prefix):
+def ipmi_sensors(prefix: list[str]) -> dict:
     out = {"at": time.time(), "fans": [], "temps": [], "redundancy": None, "power_w": None}
     for typ in ("Fan", "Temperature", "Current"):
         try:
@@ -359,7 +361,7 @@ def ipmi_sensors(prefix):
 SERVER_FAN_EVERY = 5  # server fans/temps every 5 s, re-read 0/3/8 s after fan-control changes the set %; GPU fan/temp every 1 s; always the latest reading
 
 
-def ipmi_temps(txt):
+def ipmi_temps(txt: str) -> list:
     out = []
     for line in txt.splitlines():
         f = [x.strip() for x in line.split("|")]
@@ -370,7 +372,7 @@ def ipmi_temps(txt):
     return out
 
 
-def psu_read(prefix, cache):
+def psu_read(prefix: list[str], cache: str) -> dict | None:
     out = {1: {}, 2: {}}
     try:
         for typ in ("Voltage", "Current", "Power Supply"):
@@ -394,7 +396,7 @@ def psu_read(prefix, cache):
         return None
 
 
-def fan_loop(prefix, cache, gpu_fan=None, gpu_temp=None):
+def fan_loop(prefix: list[str], cache: str, gpu_fan: object = None, gpu_temp: object = None) -> None:
     srv, it, hw, gf, gt, last_srv = deque(), deque(), deque(), deque(), deque(), 0
     psu_now = None
     set_pct, resample = None, []
@@ -470,7 +472,7 @@ def fan_loop(prefix, cache, gpu_fan=None, gpu_temp=None):
         time.sleep(max(0.2, 1 - (time.time() - t0)))
 
 
-def ipmi_loop(prefix, check=None):
+def ipmi_loop(prefix: list[str], check: str | None = None) -> None:
     while True:
         t0 = time.time()
         if check and not os.path.exists(check):
@@ -491,7 +493,7 @@ def ipmi_loop(prefix, check=None):
 PW_SAMPLES = {"q": deque(maxlen=330), "gpu": deque(maxlen=330), "started": False}
 
 
-def power_sampler(prefix, gpu_mw=None):
+def power_sampler(prefix: list[str], gpu_mw: object = None) -> None:
     while True:
         t0 = time.time()
         r = dcmi_read(prefix)
@@ -507,7 +509,7 @@ def power_sampler(prefix, gpu_mw=None):
         time.sleep(max(0.2, 1 - (time.time() - t0)))
 
 
-def dcmi_power(prefix, gpu_mw=None):
+def dcmi_power(prefix: list[str], gpu_mw: object = None) -> dict | None:
     if not PW_SAMPLES["started"]:
         PW_SAMPLES["started"] = True
         threading.Thread(target=power_sampler, args=(prefix, gpu_mw), daemon=True).start()
@@ -533,7 +535,7 @@ def dcmi_power(prefix, gpu_mw=None):
     }
 
 
-def gpu_power_mw():
+def gpu_power_mw() -> float | None:
     if nvml["lib"] is None:
         gpu_fan_rpm()
     if nvml["lib"] is None:
@@ -542,7 +544,7 @@ def gpu_power_mw():
     return v.value / 1000 if nvml["lib"].nvmlDeviceGetPowerUsage(nvml["h"], ctypes.byref(v)) == 0 else None
 
 
-def dcmi_read(prefix):
+def dcmi_read(prefix: list[str]) -> dict | None:
     try:
         r = subprocess.run(prefix + ["dcmi", "power", "reading"], capture_output=True, text=True, timeout=5).stdout
     except Exception:
@@ -577,7 +579,7 @@ LOW_MHZ, LOW_SECS, BUSY = 1800, 30, 0.70
 PSU_RE = re.compile(r"power supply|redundan|over.?current|over.?power|power cap|throttl|current|failure", re.I)
 
 
-def cpu_busy():
+def cpu_busy() -> dict:
     cur = {}
     for line in open("/proc/stat"):
         if line.startswith("cpu") and line[3].isdigit():
@@ -590,7 +592,7 @@ def cpu_busy():
     return {c: 1 - (idle - prev[c][1]) / max(1, tot - prev[c][0]) for c, (tot, idle) in cur.items() if c in prev}
 
 
-def pkg_watts():
+def pkg_watts() -> dict | None:
     """Actual CPU package watts from intel-rapl energy_uj deltas (root-only files, one sudo cat per call; Power and Jobs
     Sizing 2026-09-29: a RAPL throttle only binds below actual draw, so the guard needs the real package watts)."""
     zs = sorted(glob.glob("/sys/class/powercap/intel-rapl:[0-9]"))
@@ -619,7 +621,7 @@ def pkg_watts():
     return PW["pkg_w_last"]
 
 
-def power_watch():
+def power_watch() -> None:
     now = time.time()
     busy = cpu_busy()
     freqs = {}
@@ -730,7 +732,7 @@ def power_watch():
     }
 
 
-def power_watch_loop():
+def power_watch_loop() -> None:
     while True:
         try:
             power_watch()
@@ -743,7 +745,7 @@ CAPS_URL = DASH_URL + "/api/powercaps"
 CAPS = {"applied": None, "error": None}
 
 
-def powercaps_loop():
+def powercaps_loop() -> None:
     import urllib.request
 
     while True:
@@ -777,7 +779,7 @@ def powercaps_loop():
         time.sleep(10)  # 10 s (was 60): power-management throttles are short-lived (2026-09-29)
 
 
-def quickcool_loop():
+def quickcool_loop() -> None:
     import urllib.request
 
     while True:
@@ -805,7 +807,7 @@ HOOK_DIR = "/dev/shm/power-hooks"  # 2026-09-28: jobs register here instead of p
 LOW_PROFILES = ("lowpower", "normal", "daytime")
 
 
-def fire_power_hooks(profile, reason="run profile change"):
+def fire_power_hooks(profile: str, reason: str = "run profile change") -> None:
     """Run every executable in HOOK_DIR as `<hook> down|up <profile>` (detached; output to hooks.log) and record the state in
     state.json so a job that starts later can read it. down = Low Power (pause GPU/heavy work), up = Adaptive/Unattended (resume)."""
     scale = "down" if profile in LOW_PROFILES else "up"
@@ -826,7 +828,7 @@ def fire_power_hooks(profile, reason="run profile change"):
         print("power hooks:", e, flush=True)
 
 
-def apply_profile(profile, at):
+def apply_profile(profile: str, at: float | None) -> bool:
     if profile not in ("daytime", "unattended", "normal", "adaptive", "lowpower"):
         return False
     try:
@@ -854,7 +856,7 @@ def apply_profile(profile, at):
     return True
 
 
-def runprofile_loop():
+def runprofile_loop() -> None:
     import urllib.request
 
     while True:
@@ -872,7 +874,7 @@ def runprofile_loop():
 CARVE = {"dirs": {}, "counts": {}}
 
 
-def carve_scan():
+def carve_scan() -> dict:
     out, now = [], time.time()
     for d in sorted(glob.glob("/dev/shm/carve-*/")):
         d = d.rstrip("/")
@@ -943,7 +945,7 @@ def carve_scan():
     return {"ts": now, "runs": out, "devs": devs}
 
 
-def carve_loop():
+def carve_loop() -> None:
     while True:
         try:
             c = carve_scan()
@@ -953,7 +955,7 @@ def carve_loop():
         time.sleep(60)
 
 
-def archiver_progress():
+def archiver_progress() -> dict:
     out = {}
     for p in glob.glob("/dev/shm/archiver/work/*.progress"):
         try:
@@ -964,7 +966,7 @@ def archiver_progress():
     return out
 
 
-def log_tails():
+def log_tails() -> dict:
     out = {}
     for p in LOGS:
         try:
@@ -982,7 +984,7 @@ def log_tails():
 hub = {"conn": None}
 
 
-def hub_write(host, report):
+def hub_write(host: str, report: dict) -> bool:
     if pymysql is None or not os.path.exists(HUB_CNF):
         return False
     try:
@@ -1011,7 +1013,7 @@ def hub_write(host, report):
         return False
 
 
-def loop():
+def loop() -> None:
     pc, pd, pn, pt = cpu_times(), diskstats(), netbytes(), time.time()
     slow_at, slow = 0, {}
     while True:
@@ -1098,10 +1100,10 @@ def loop():
 
 
 class H(BaseHTTPRequestHandler):
-    def log_message(self, *a):
+    def log_message(self, *a: object) -> None:
         pass
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         ok, msg = False, "not found"
         if self.path.split("?")[0] == "/runprofile":
             if self.client_address[0].removeprefix("::ffff:") != DASH_CLIENT:
@@ -1121,7 +1123,7 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         with lock:
             b = json.dumps({"fast": state["fast"], "history": list(state["history"]), "updated": state["updated"]}).encode()
         self.send_response(200)

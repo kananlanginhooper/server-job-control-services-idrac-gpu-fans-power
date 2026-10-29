@@ -1,6 +1,8 @@
 """NVIDIA GPU readings and power limit over nvidia-smi (ported from the original per-server dashboard agent)."""
 from __future__ import annotations
 
+import shlex
+
 from .config import settings
 from .shell import run
 
@@ -37,14 +39,14 @@ def gpus() -> list[dict] | None:
     if not settings.nvidia_smi:
         return None
     try:
-        r = run([settings.nvidia_smi, "--query-gpu=" + ",".join(FIELDS), "--format=csv,noheader,nounits"], timeout=10)
+        r = run(shlex.split(settings.nvidia_smi) + ["--query-gpu=" + ",".join(FIELDS), "--format=csv,noheader,nounits"], timeout=10)
     except Exception:
         return None
     return parse(r.stdout) if r.returncode == 0 else None
 
 
 def compute_apps() -> list[dict]:
-    r = run([settings.nvidia_smi, "--query-compute-apps=pid,process_name,used_memory", "--format=csv,noheader,nounits"], timeout=10)
+    r = run(shlex.split(settings.nvidia_smi) + ["--query-compute-apps=pid,process_name,used_memory", "--format=csv,noheader,nounits"], timeout=10)
     out = []
     for line in r.stdout.splitlines():
         f = [x.strip() for x in line.split(",")]
@@ -54,6 +56,6 @@ def compute_apps() -> list[dict]:
 
 
 def set_power_limit(watts: int, index: int = 0) -> None:
-    r = run(settings.sudo + [settings.nvidia_smi, "-i", str(index), "-pl", str(watts)], timeout=20)
+    r = run(settings.sudo + shlex.split(settings.nvidia_smi) + ["-i", str(index), "-pl", str(watts)], timeout=20)
     if r.returncode:
         raise RuntimeError((r.stderr or r.stdout).strip()[:200] or "nvidia-smi -pl failed")

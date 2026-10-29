@@ -55,4 +55,15 @@ It installs the unit and reloads systemd, nothing more. Enabling and starting a 
 
 ## Testing
 
-Automated tests never touch live control. Mocks of the dashboard API (`/api/powertarget`, `/api/throttle`, `/api/state`), `ipmitool`, `nvidia-smi` and the RAPL sysfs files will sit next to the services they stand in for, switched by config.
+Automated tests never touch live control. They run against the [mocks](mocks/): a mock dashboard API, a mock `ipmitool` and a mock `nvidia-smi`.
+
+```bash
+python -m pip install -r tests/requirements.txt
+python -m pytest -q tests
+```
+
+Covered so far:
+- **Settings lookup:** `<HOST>_` overrides, then shared keys, then defaults.
+- **power-guard:** readings, triggers, step-down sizes, floors, GPU-last ordering, step-up and release, dry-run.
+- **`sjc_hw`:** parsing the BMC and GPU output, Emergency limits.
+- **sjc-agent command safety:** refused while fan-control runs; lease and hand-back to Dell auto; range checks.

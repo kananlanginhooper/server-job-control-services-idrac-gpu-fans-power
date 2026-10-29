@@ -2,6 +2,13 @@
 
 Design for the three items still open after wall-clock schedules, power sizing and pruning. The owner decides; nothing here is built yet. Every step keeps the rule the runner was built on: **each server boots and runs its own work with the other machines down.**
 
+> **Updated 2026-10-29 by the owner's architecture decision:** ONE control container (REST API + database + queue) for every server, and ONE queue-driven agent per server that pulls its orders from it. So:
+> - The **work queue (section 2) lives in the container's database**, not in each server's Postgres. Workers claim leased batches, so a container outage only stops new claims.
+> - The **control API (section 3) is the container's API**, not a per-server one. Servers only pull: no inbound port, which also works through NAT.
+> - The runner becomes that agent: it syncs its `tasks` table from the container's orders and keeps running them when the container is down.
+>
+> The contract is [`contracts/agent-api.md`](../contracts/agent-api.md) (draft, being agreed with the container's owner). Section 1 (feeds) folds into the agent's `report` call. The rest of this file is kept for the reasoning.
+
 ## 1. Dashboard feeds (smallest; build first)
 
 **Goal:** every task shows up on the dashboard with a graph.

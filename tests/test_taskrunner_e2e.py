@@ -115,6 +115,14 @@ def test_runner(tmp_path):
             time.sleep(12)  # a few ticks
             assert runs("sched") == 1 and runs("atjob") == 0
             assert status()["sched"]["state"]["0"] == "scheduled"
+
+            # taskctl restart (restart_gen + 1): the running copy is stopped and started again, with no back-off
+            before = runs("sized")
+            db.execute("update tasks set restart_gen = restart_gen + 1 where name='sized'")
+            wait(lambda: runs("sized") == before + 1 and (s := status()) and s["sized"]["running"] == 1, secs=30)
+            assert db.execute(
+                "select count(*) from task_runs where task='sized' and ended_at is null"
+            ).fetchone()[0] == 1  # the old copy ended; only the new one is open
         finally:
             runner.send_signal(signal.SIGTERM)
             runner.wait(60)

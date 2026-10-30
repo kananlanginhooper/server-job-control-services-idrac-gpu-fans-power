@@ -10,6 +10,7 @@
 #                  --power none clears it
 #   taskctl set NAME [--instances N] [--cmd ...] [--every SECS] [--at HH:MM ...] [--power W=N ...] [--nice N] [--desc TEXT]
 #   taskctl enable NAME | disable NAME | rm NAME
+#   taskctl restart NAME                 stop its running copies (TERM, KILL after stop_secs); the runner starts them again
 #   taskctl runs NAME [N]                 last N runs (default 10)
 #   taskctl log NAME [INSTANCE] [LINES]   tail of the task's log
 import argparse, json, os, re, subprocess, sys, urllib.request
@@ -43,7 +44,7 @@ def main():
         a.add_argument("--need-path", action="append", default=[]); a.add_argument("--need-http", action="append", default=[])
         a.add_argument("--gpu", action="store_true"); a.add_argument("--nice", type=int); a.add_argument("--desc")
         a.add_argument("--disabled", action="store_true")
-    for name in ("enable", "disable", "rm"):
+    for name in ("enable", "disable", "restart", "rm"):
         sp.add_parser(name).add_argument("name")
     r = sp.add_parser("runs"); r.add_argument("name"); r.add_argument("n", nargs="?", type=int, default=10)
     lg = sp.add_parser("log"); lg.add_argument("name"); lg.add_argument("instance", nargs="?", default="0")
@@ -105,6 +106,9 @@ def main():
     elif a.cmd in ("enable", "disable"):
         n = c.execute("update tasks set enabled=%s where name=%s", (a.cmd == "enable", a.name)).rowcount
         print("ok" if n else "no such task")
+    elif a.cmd == "restart":
+        n = c.execute("update tasks set restart_gen=restart_gen+1 where name=%s", (a.name,)).rowcount
+        print("ok (restarts within ~5 s; a disabled task stays stopped)" if n else "no such task")
     elif a.cmd == "rm":
         print("ok" if c.execute("delete from tasks where name=%s", (a.name,)).rowcount else "no such task")
     elif a.cmd == "runs":

@@ -197,7 +197,7 @@ When every consumer is on the owning host itself, it may go `drain` → `free` l
 ### 10.4 Host-local GPU map (`.env`, not orders)
 
 ```
-DESK_GPUS={"desk-gpu0": {"ollama": ["http://127.0.0.1:11434", "http://127.0.0.1:11437"], "units": ["tug-vision"]}}
+DESK_GPUS={"desk-gpu0": {"ollama": ["http://127.0.0.1:11434", "http://127.0.0.1:11437"], "units": ["tug-vision"], "lock": "<lock name>"}}
 ```
 
 `<HOST>_GPUS` names, per GPU the host owns, its Ollama instances and its units. The agent stops and starts only units in that list.

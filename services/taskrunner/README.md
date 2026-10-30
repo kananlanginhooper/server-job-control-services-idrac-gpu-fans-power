@@ -75,6 +75,7 @@ taskctl add NAME --cmd 'CMD' [--workdir D] [--env K=V ...] [--kind continuous|sc
             [--nice N] [--desc TEXT] [--disabled]
 taskctl set NAME [--instances N] [--cmd ...] [--every SECS] [--at HH:MM ...] [--power W=N ...] [--nice N] [--desc TEXT]
 taskctl enable NAME | disable NAME | rm NAME
+taskctl restart NAME                    # stop its running copies; the runner starts them again (new settings take effect)
 taskctl runs NAME [N]                          # last N task_runs rows
 taskctl log NAME [INSTANCE] [LINES]            # tail of the task's log
 ```
@@ -93,6 +94,7 @@ Examples: `taskctl set db-dump-personal --at 02:30` (nightly at 02:30 instead of
 1. **`every_secs` schedules drift.** They count from the last start, so a late start moves every later run. Use `at_times` for anything that should run at a fixed hour (backups, dumps).
 2. **Restarting the runner restarts every task** (`KillMode=mixed`: TERM, wait up to 30 s, KILL). Work a job had claimed as `running` is released by that job's own stale-claim logic, or by hand.
 3. **Continuous tasks restart even after a clean exit.** STOP-file conventions don't stop a task permanently. **Stop a task with `taskctl disable`.**
+   - **To restart a task (e.g. after changing its command or env), use `taskctl restart NAME`.** A `disable` straight followed by `enable` does nothing: the runner polls every 5 s, never sees the row disabled, and the old process keeps its old settings. (Before `taskctl restart` existed: disable, wait for the process to exit, then enable.) A `set` alone doesn't restart running copies either.
 4. **No per-task resource limits.** All tasks share the runner's cgroup; there are no CPU, memory or I/O caps beyond `nice`/`ionice` in the command. Instance counts follow the power target only for tasks with `instances_by_power`; everything else is set by hand. The `gpu` need only gates *starts* in Low Power.
 5. **Scaling down by power kills work in progress.** The extra copies get SIGTERM, then SIGKILL after `stop_secs`. An item they had claimed is released by the job's own stale-claim logic. Give such tasks a `stop_secs` long enough to finish an item, or handle SIGTERM.
 6. **`taskctl set --env` / `--need-*` replace the whole JSON field** (no merge).

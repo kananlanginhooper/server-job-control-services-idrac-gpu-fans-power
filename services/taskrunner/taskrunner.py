@@ -73,6 +73,7 @@ create table if not exists tasks(
 );
 alter table tasks add column if not exists at_times text[];             -- schedule: daily 'HH:MM' (overrides every_secs)
 alter table tasks add column if not exists instances_by_power jsonb;    -- continuous: {"<combined_w>": instances}
+alter table tasks add column if not exists restart_gen int not null default 0;  -- taskctl restart bumps it: running copies restart
 create table if not exists task_runs(
   id bigserial primary key,
   task text not null,
@@ -215,8 +216,9 @@ class Need:
 
 
 class Proc:
-    def __init__(self, task: str, inst: int, popen: subprocess.Popen, run_id: int | None) -> None:
+    def __init__(self, task: str, inst: int, popen: subprocess.Popen, run_id: int | None, gen: int = 0) -> None:
         self.task, self.inst, self.p, self.run_id, self.t0, self.stopping = task, inst, popen, run_id, time.time(), None
+        self.gen = gen  # the row's restart_gen when this copy started
 
 
 class Runner:
@@ -253,7 +255,7 @@ class Runner:
     def load(self) -> bool:
         rows = self.q(
             "select name, command, workdir, env, kind, instances, every_secs, needs, nice, stop_secs, enabled, "
-            "extract(epoch from updated_at), at_times, instances_by_power from tasks"
+            "extract(epoch from updated_at), at_times, instances_by_power, restart_gen from tasks"
         )
         if rows is None:
             return False  # keep running what we have; retry next tick
@@ -282,6 +284,7 @@ class Runner:
                         "updated",
                         "at_times",
                         "instances_by_power",
+                        "restart_gen",
                     ),
                     r,
                 )
@@ -340,7 +343,7 @@ class Runner:
         finally:
             out.close()
         r = self.q("insert into task_runs(task, instance, pid) values(%s, %s, %s) returning id", (t["name"], inst, p.pid))
-        self.procs[key] = Proc(t["name"], inst, p, r[0][0] if r else None)
+        self.procs[key] = Proc(t["name"], inst, p, r[0][0] if r else None, t.get("restart_gen") or 0)
         if t["kind"] == "schedule":
             self.last_sched[t["name"]] = time.time()
         log(f"started {t['name']}.{inst} pid {p.pid}")
@@ -397,6 +400,8 @@ class Runner:
             t = self.tasks.get(pr.task)
             if not t or not t["enabled"] or pr.inst >= want[pr.task]:
                 self.stop(pr, "disabled or fewer instances")
+            elif pr.gen < (t.get("restart_gen") or 0):
+                self.stop(pr, "restart requested")  # started again by the loop below once it has exited
             elif pr.stopping is not None:
                 self.stop(pr, "")
         for t in self.tasks.values():

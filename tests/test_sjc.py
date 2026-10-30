@@ -108,3 +108,12 @@ def test_gpu_limit_range(agent):
     a.latest["gpu"] = gpu.gpus()
     assert a.command("gpu_limit", {"w": 999})["ok"] is False
     assert a.command("gpu_limit", {"w": 300}) == {"ok": True, "index": 0, "w": 300}
+
+
+def test_gpu_limit_refused_when_gpu_is_read_only(agent, monkeypatch):
+    a, log, tmp = agent
+    fan_control_state(tmp, age_s=3600)
+    a.latest["gpu"] = gpu.gpus()
+    monkeypatch.setattr(S, "gpu_readonly", True)
+    r = a.command("gpu_limit", {"w": 300})
+    assert r["ok"] is False and "read-only" in r["error"]

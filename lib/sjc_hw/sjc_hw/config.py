@@ -34,6 +34,7 @@ class Settings:
     ipmitool: list[str] = field(default_factory=lambda: shlex.split(env("SJC_IPMITOOL", "ipmitool")))
     sdr_cache: str = env("SJC_SDR_CACHE", "/tmp/sjc-sdr.cache")
     nvidia_smi: str = env("SJC_NVIDIA_SMI", "")  # empty = this server has no GPU
+    gpu_readonly: bool = env("SJC_GPU_READONLY", "") not in ("", "0")  # 1 = refuse gpu_limit (GPU lent out)
     sudo: list[str] = field(default_factory=lambda: shlex.split(env("SJC_SUDO", "")))  # "sudo -n" outside a container
     host_proc: str = env("SJC_HOST_PROC", "/proc")  # /host/proc in a container, for system metrics
 

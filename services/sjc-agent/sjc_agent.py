@@ -13,7 +13,8 @@ Topics (all retained, JSON), under <prefix>/<host>/:
 Commands: <prefix>/<host>/cmd/<name> with {"id": "...", ...}; the reply goes to <prefix>/<host>/result/<id>.
   fans       {"pct": 20-100} or {"auto": true}
   gpu_limit  {"w": watts, "index": 0}
-Fan and GPU commands are refused while fan-control is running: it owns them. When the agent does hold manual fan
+Fan and GPU commands are refused while fan-control is running: it owns them. gpu_limit is also refused with
+SJC_GPU_READONLY set (a GPU lent to another project: the agent only reads it). When the agent does hold manual fan
 control, it hands back to Dell auto when the lease runs out or any sensor reaches its Emergency temperature.
 """
 
@@ -183,6 +184,8 @@ def command(name: str, b: dict) -> dict:
                 manual.update(pct=pct, until=time.time() + S.manual_lease_s, by=b.get("by"))
                 return {"ok": True, "pct": pct, "until": manual["until"]}
         if name == "gpu_limit":
+            if S.gpu_readonly:
+                return {"ok": False, "error": "this server's GPU is read-only here (SJC_GPU_READONLY)"}
             idx, w = int(b.get("index") or 0), int(b.get("w"))
             card = next((g for g in latest["gpu"] or [] if int(g["index"] or 0) == idx), None)
             if not card:

@@ -12,6 +12,6 @@ Publishes this server's state to MQTT and runs the commands sent to it. **Topics
 |---|---|
 | Reads | BMC (`ipmitool`), `nvidia-smi`, the controller state files, `/proc`. |
 | Writes | MQTT `<SJC_MQTT_PREFIX>/<SJC_HOST>/...`. |
-| Settings | The `SJC_*` keys in `.env.example`. Run: `docker compose up -d --build` in this folder; add `-f compose.gpu.yaml` on GPU hosts, and `-f compose.hub.yaml` on the hub (mounts the power scaler's state folder; export `SJC_SCALER_DIR` first, see that file). |
+| Settings | The `SJC_*` keys in `.env.example`. Run: `docker compose up -d --build` in this folder; add `-f compose.bmc.yaml` on servers with a BMC (`/dev/ipmi0`), `-f compose.gpu.yaml` on GPU hosts (set `<HOST>_SJC_GPU_READONLY=1` while the GPU is lent out: `gpu_limit` is then refused), and `-f compose.hub.yaml` on the hub (mounts the power scaler's state folder; export `SJC_SCALER_DIR` first, see that file). |
 
 Settings come from the repo's one `.env` (see [`.env.example`](../../.env.example)). The unit file(s) here are templates: `scripts/install-units.sh` renders `@REPO@`/`@USER@` and installs them. It doesn't enable or start them.

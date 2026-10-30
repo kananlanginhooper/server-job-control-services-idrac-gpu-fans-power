@@ -27,7 +27,7 @@ On the receiver, the consumer takes files out of `/link/<from>-<self>/` and move
 - Push = `rsync -a --partial-dir=.rsync-partial --remove-source-files --chmod=... [--bwlimit=cap] <outbox>/ <to>-link:`. Dotfiles, dot folders (`.incoming`, `.rsync-partial`) and `*.part` are never sent. The target is the inbox root (`<to>-link:`) because rrsync roots the key there.
 - **Only settled files are pushed** (defense in depth, after a 2026-10-29 incident where a producer wrote straight into an outbox and lost most of a file). A file changed in the last `LINK_SETTLE_S` (default 60 s), or open for writing by any process the service user can see in `/proc`, is held and retried once it can have settled. While anything is held, `.done` markers wait too. Each push sends an explicit `--files-from` list, never the whole folder, so nothing outside that list is ever removed.
 - A failed push backs off 30 s, doubling to 15 min. Files stay in the outbox until they've arrived whole.
-- `LINK_SERIAL=1` lets only one outbox push at a time, so a server on a capped link stays under its outbound cap.
+- Caps are optional, per direction (`<to>:<KB/s>`; 0 = none). The current deployment runs **no caps on any pair** (since 2026-10-29, after a slow link was fixed). `LINK_SERIAL=1` lets only one outbox push at a time, for a server whose link needs an outbound cap.
 - **Never pushes from a network mount.** If an outbox is on NFS/CIFS/sshfs, it refuses: `--remove-source-files` would delete the only copy on the far side.
 - Empty subfolders left by `--remove-source-files` are removed after 10 min.
 

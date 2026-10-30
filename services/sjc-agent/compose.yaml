@@ -1,7 +1,8 @@
 # sjc-agent on this server: publishes its BMC, GPU, controller and system state to MQTT and runs the commands sent to it
 # (topic contract: contracts/mqtt-topics.md). The broker, backend and UI live in the dashboard repo.
 #   cd services/sjc-agent && docker compose up -d --build
-#   with an NVIDIA GPU (needs nvidia-container-toolkit): docker compose -f compose.yaml -f compose.gpu.yaml up -d --build
+#   with a BMC (the Dell servers): add -f compose.bmc.yaml
+#   with an NVIDIA GPU (needs nvidia-container-toolkit): add -f compose.gpu.yaml
 # Settings: the repo's ONE .env (SJC_* keys; <HOST>_SJC_* for per-server values).
 name: sjc-agent
 
@@ -12,7 +13,6 @@ services:
     network_mode: host          # real NIC counters, reaches the broker on the LAN, and keeps the host's hostname
     # (host networking on purpose, so it does not join the shared `homelab` bridge network; that rule is for bridged containers)
     pid: host
-    devices: ["/dev/ipmi0:/dev/ipmi0"]   # in-band IPMI to this server's BMC
     env_file: ../../.env
     environment:
       SJC_HOST_PROC: /host/proc

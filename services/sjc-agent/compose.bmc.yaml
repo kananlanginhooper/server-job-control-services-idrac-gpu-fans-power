@@ -1,0 +1,5 @@
+# Add on servers with a BMC (in-band IPMI): docker compose -f compose.yaml -f compose.bmc.yaml ...
+# A box without /dev/ipmi0 leaves this file out; its idrac topic then just carries the read error.
+services:
+  agent:
+    devices: ["/dev/ipmi0:/dev/ipmi0"]

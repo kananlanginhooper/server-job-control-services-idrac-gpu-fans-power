@@ -53,3 +53,5 @@ taskctl add link-pusher --kind continuous --desc 'push /link outboxes to the oth
 ```
 
 Logs: `taskctl log link-pusher`. Stop: `taskctl disable link-pusher`.
+
+Settings are read once at start. To apply a change, run `taskctl disable link-pusher`, wait until the process has exited, then run `taskctl enable link-pusher`. If you enable it again before the runner has stopped it, the old process keeps running.

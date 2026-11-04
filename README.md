@@ -67,3 +67,6 @@ Covered so far:
 - **power-guard:** readings, triggers, step-down sizes, floors, GPU-last ordering, step-up and release, dry-run.
 - **`sjc_hw`:** parsing the BMC and GPU output, Emergency limits.
 - **sjc-agent command safety:** refused while fan-control runs; lease and hand-back to Dell auto; range checks.
+
+---
+Built by [Kanan Hooper](https://github.com/kananlanginhooper)

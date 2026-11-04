@@ -4,6 +4,10 @@ name = "server-services"
 version = "0.1.0"
 description = "Helper services for a home lab: BMC (iDRAC), GPUs, fans, power"
 requires-python = ">=3.9"
+authors = [{ name = "Kanan Hooper" }]
+
+[project.urls]
+Author = "https://github.com/kananlanginhooper"
 
 [tool.ruff]
 line-length = 130

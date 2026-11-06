@@ -1,0 +1,10 @@
+# Drive and kernel health (sjc/<host>/health): SMART on every non-USB drive, including drives behind a MegaRAID/PERC
+# controller, plus kernel I/O errors. smartctl needs raw device access, so this add-on runs the agent privileged with the
+# host's /dev. Owner-approved 2026-11-01; servers only. Add it with -f compose.health.yaml.
+services:
+  agent:
+    privileged: true
+    environment:
+      SJC_HEALTH: "1"
+    volumes:
+      - /dev:/dev

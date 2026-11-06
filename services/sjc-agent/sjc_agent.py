@@ -28,7 +28,7 @@ from collections import deque
 
 import paho.mqtt.client as mqtt
 
-from sjc_hw import gpu, idrac, safety, system
+from sjc_hw import gpu, health, idrac, safety, system
 from sjc_hw.config import settings as S
 
 log = logging.getLogger("sjc-agent")
@@ -103,8 +103,11 @@ def main() -> None:
     client.will_set(f"{BASE}/status", "offline", qos=1, retain=True)
     client.reconnect_delay_set(1, 30)
 
+    connected = threading.Event()
+
     def on_connect(c: mqtt.Client, _u: object, _f: object, rc: object, _p: object = None) -> None:
         log.info("mqtt connected (%s)", rc)
+        connected.set()
         c.publish(f"{BASE}/status", "online", qos=1, retain=True)
         c.subscribe(f"{BASE}/cmd/+", qos=1)
 
@@ -154,13 +157,24 @@ def main() -> None:
 
     def system_pub() -> None:
         pub(client, "system", system.snapshot())
+        pub(client, "sensors", system.sensors())
 
+    def disks_pub() -> None:
+        pub(client, "disks", system.disks())
+
+    def health_pub() -> None:
+        pub(client, "health", health.snapshot())
+
+    connected.wait(30)  # the first publishes of each loop would be dropped before the broker connection is up
     loop(S.sensor_every_s, sensors)
     loop(S.power_every_s, power)
     if S.nvidia_smi:
         loop(S.gpu_every_s, gpus)
     loop(S.safety_every_s, safety_pub)
     loop(S.system_every_s, system_pub)
+    loop(S.disks_every_s, disks_pub)
+    if S.health:
+        loop(S.health_every_s, health_pub)
     while True:
         time.sleep(3600)
 

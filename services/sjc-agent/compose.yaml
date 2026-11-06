@@ -16,8 +16,11 @@ services:
     env_file: ../../.env
     environment:
       SJC_HOST_PROC: /host/proc
+      SJC_HOST_ROOT: /host/root      # free space for every host mount (read-only)
+      SJC_HOST_SHM: /host/shm
     volumes:                    # read-only views of the host; the agent never writes controller files
       - /proc:/host/proc:ro
       - /run:/host/run:ro
       - /dev/shm:/host/shm:ro
       - /usr/local/etc:/host/etc:ro
+      - /:/host/root:ro,rslave      # statvfs only: filesystem space per mount (like node-exporter)

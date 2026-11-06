@@ -13,7 +13,7 @@ import sys
 
 TEMP = os.environ.get("MOCK_GPU_TEMP", "71")
 # the field order sjc_hw.gpu.FIELDS asks for
-ROW = f"0, Mock GPU 24GB, {TEMP}, 87, 20480, 24564, 65, 301.50, 400.00, 150.00, 450.00, 2610, 54, 3, 16"
+ROW = f"0, Mock GPU 24GB, {TEMP}, 87, 20480, 24564, 65, 301.50, 400.00, 150.00, 450.00, 2610, 54, 3, 16, 4, 16"
 APPS = "4242, ollama, 18000\n"
 
 

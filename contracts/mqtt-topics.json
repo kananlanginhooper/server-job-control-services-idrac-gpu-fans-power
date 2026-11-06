@@ -1,6 +1,6 @@
 {
   "contract": "sjc-mqtt",
-  "version": 1,
+  "version": 1.1,
   "doc": "contracts/mqtt-topics.md (the human version; change both together)",
   "prefix_env": "SJC_MQTT_PREFIX",
   "prefix_default": "sjc",
@@ -12,13 +12,19 @@
     "power":    {"retain": true, "qos": 0, "every_env": "SJC_SENSOR_EVERY_S", "nullable": true,
                  "fields": ["t", "w", "peak_5s", "max_60s", "avg_60s", "min_60s", "max_5m", "every_s"]},
     "gpu":      {"retain": true, "qos": 0, "every_env": "SJC_GPU_EVERY_S", "only_if_env": "SJC_NVIDIA_SMI",
-                 "fields": ["at", "cards?[index,name,temp,util,mem_used,mem_total,fan_pct,power_w,power_limit_w,power_min_w,power_max_w,sm_mhz,mem_util,pcie_gen,pcie_width]"]},
+                 "fields": ["at", "cards?[index,name,temp,util,mem_used,mem_total,fan_pct,power_w,power_limit_w,power_min_w,power_max_w,sm_mhz,mem_util,pcie_gen,pcie_width,pcie_gen_max,pcie_width_max,fan_rpm?]"]},
     "safety":   {"retain": true, "qos": 0, "every_env": "SJC_SAFETY_EVERY_S",
                  "fields": ["at", "fan_control{...,events,unit,age_s,running,in_emergency}", "emergency_c{kind:c}", "manual{pct,until,by,released}"]},
     "runlevel": {"retain": true, "qos": 0, "every_env": "SJC_SAFETY_EVERY_S",
                  "fields": ["at", "profile_file", "profile_active", "mode", "matches", "throttle?", "scaler?{unit,state}"]},
     "system":   {"retain": true, "qos": 0, "every_env": "SJC_SYSTEM_EVERY_S",
-                 "fields": ["at", "cpu_pct", "cpu_count", "load[3]", "mem{total,used,pct}", "swap{total,used,pct}", "disk_io{dev:{read_bps,write_bps,busy_pct}}", "net_io{nic:{rx_bps,tx_bps}}", "hwmon_max_c{chip:c}", "uptime_s"]}
+                 "fields": ["at", "cpu_pct", "cpu_count", "load[3]", "mem{total,used,avail,pct}", "swap{total,used,pct}", "disk_io{dev:{read_bps,write_bps,busy_pct}}", "net_io{nic:{rx_bps,tx_bps}}", "nics{nic:{up,speed_mbit?}}", "cpu_pkg_w{package-N:W}?", "dstate{count,names}", "hwmon_max_c{chip:c}", "edac{ce,ue}", "ram_bw?", "peak_power?", "uptime_s"]},
+    "sensors":  {"retain": true, "qos": 0, "every_env": "SJC_SYSTEM_EVERY_S",
+                 "fields": ["at", "temps[chip,label,c,high?,crit?]", "fans[chip,label,rpm]"]},
+    "disks":    {"retain": true, "qos": 0, "every_env": "SJC_DISKS_EVERY_S",
+                 "fields": ["at", "filesystems[mount,dev,fstype,total,used,free,pct,ro,shutdown,remote,same_as?]", "mdraid[name,state,level,members,active,degraded,sync?]"]},
+    "health":   {"retain": true, "qos": 0, "every_env": "SJC_HEALTH_EVERY_S", "only_with": "SJC_HEALTH=1",
+                 "fields": ["at", "drives[dev,serial,model,proto,passed,temp,trip,hours,size,rc,realloc?,pending?,crc?,uncorrect?,wear?,spare?,media?,crit?,errlog?,grown?,unc?,error?]", "kernel{dev:count}?", "edac{ce,ue}", "every_s"]}
   },
   "commands": {
     "deprecated": "2026-10-29 owner: no new users; fan override + GPU limit go through :8090, other agent commands through contracts/agent-api.md. Removed in topic contract v2.",

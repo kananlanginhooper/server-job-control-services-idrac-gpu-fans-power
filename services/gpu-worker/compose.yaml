@@ -1,0 +1,36 @@
+# A GPU worker in Docker, with its own Ollama: for a machine that isn't a server (first: the owner's laptop, 2026-10-31).
+# The servers run the worker as a task-runner row instead (README).
+#   docker compose -f services/gpu-worker/compose.yaml up -d      (from the repo root; settings come from the repo's .env)
+# The container's hostname is the worker's host name at the broker, so its <HOST>_ keys apply (e.g. LAPTOP_GPU_WORKER_MODELS).
+name: gpu-worker
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: laptop-ollama
+    restart: unless-stopped
+    gpus: all
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+    ports: ["127.0.0.1:11434:11434"]
+    volumes: ["ollama-models:/root/.ollama"]
+
+  worker:
+    image: python:3.12-slim
+    restart: unless-stopped
+    hostname: ${GPU_WORKER_HOSTNAME:-laptop}
+    depends_on: [ollama]
+    environment:
+      SERVICES_ENV_FILE: /repo/.env
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ../../.env:/repo/.env:ro
+      - ../../lib:/repo/lib:ro
+      - ./:/repo/services/gpu-worker:ro
+    command: ["python3", "-B", "/repo/services/gpu-worker/gpu_worker.py"]
+
+volumes:
+  ollama-models:
+    name: laptop-ollama-models
+    external: true

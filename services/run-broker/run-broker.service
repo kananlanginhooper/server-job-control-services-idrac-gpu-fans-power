@@ -1,0 +1,16 @@
+[Unit]
+Description=Run broker: places task requests on the servers' task runners and records their runs (hub only, 2026-10-30)
+# Same local Postgres as the hub's task runner; it never waits for another machine
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+User=svc
+# the shared settings file (install.sh fills in the clone's path)
+Environment=SERVICES_ENV_FILE=/path/to/repo/.env
+ExecStart=/usr/bin/python3 -B /opt/run-broker/run_broker.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

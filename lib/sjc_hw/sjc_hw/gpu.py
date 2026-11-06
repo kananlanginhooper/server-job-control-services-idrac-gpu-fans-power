@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import shlex
 
 from .config import settings
@@ -23,6 +24,8 @@ FIELDS = [
     "utilization.memory",
     "pcie.link.gen.current",
     "pcie.link.width.current",
+    "pcie.link.gen.max",
+    "pcie.link.width.max",
 ]
 KEYS = [
     "index",
@@ -40,6 +43,8 @@ KEYS = [
     "mem_util",
     "pcie_gen",
     "pcie_width",
+    "pcie_gen_max",
+    "pcie_width_max",
 ]
 
 
@@ -74,7 +79,62 @@ def gpus() -> list[dict] | None:
         )
     except Exception:
         return None
-    return parse(r.stdout) if r.returncode == 0 else None
+    cards = parse(r.stdout) if r.returncode == 0 else None
+    for c in cards or []:
+        c["fan_rpm"] = fan_rpm(int(c["index"] or 0))  # nvidia-smi has no RPM; NVML does (driver 520+)
+        if c.get("mem_used") is not None and c["mem_used"] <= 2 * 1024 * 1024:
+            # a 1 MiB reading was seen once on a busy card (2026-11-01): confirm it with NVML before publishing it
+            used = mem_used(int(c["index"] or 0))
+            if used is not None:
+                c["mem_used"] = used
+    return cards
+
+
+_nvml: dict = {"lib": None, "failed": False}
+
+
+class _NvFan(ctypes.Structure):
+    _fields_ = [("version", ctypes.c_uint), ("fan", ctypes.c_uint), ("speed", ctypes.c_uint)]
+
+
+class _NvMem(ctypes.Structure):
+    _fields_ = [("total", ctypes.c_ulonglong), ("free", ctypes.c_ulonglong), ("used", ctypes.c_ulonglong)]
+
+
+def mem_used(index: int = 0) -> float | None:
+    """Used VRAM in bytes straight from NVML; None if NVML isn't available."""
+    if fan_rpm(index) is None and _nvml["lib"] is None:
+        return None
+    try:
+        h = ctypes.c_void_p()
+        if _nvml["lib"].nvmlDeviceGetHandleByIndex_v2(index, ctypes.byref(h)):
+            return None
+        m = _NvMem()
+        return float(m.used) if _nvml["lib"].nvmlDeviceGetMemoryInfo(h, ctypes.byref(m)) == 0 else None
+    except (OSError, AttributeError):
+        return None
+
+
+def fan_rpm(index: int = 0) -> float | None:
+    """The card's first fan in RPM via NVML (libnvidia-ml, mounted by the NVIDIA runtime); None if unsupported."""
+    if _nvml["failed"]:
+        return None
+    try:
+        if _nvml["lib"] is None:
+            lib = ctypes.CDLL("libnvidia-ml.so.1")
+            if lib.nvmlInit_v2():
+                _nvml["failed"] = True
+                return None
+            _nvml["lib"] = lib
+        h = ctypes.c_void_p()
+        if _nvml["lib"].nvmlDeviceGetHandleByIndex_v2(index, ctypes.byref(h)):
+            return None
+        s = _NvFan()
+        s.version = ctypes.sizeof(_NvFan) | (1 << 24)
+        return float(s.speed) if _nvml["lib"].nvmlDeviceGetFanSpeedRPM(h, ctypes.byref(s)) == 0 else None
+    except (OSError, AttributeError):
+        _nvml["failed"] = True
+        return None
 
 
 def compute_apps() -> list[dict]:

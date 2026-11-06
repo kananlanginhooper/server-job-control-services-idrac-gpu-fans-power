@@ -1,0 +1,313 @@
+{
+  "doc": "docs/metrics-history.md explains every key. Change this file, then restart metrics-recorder; nothing else to edit.",
+  "tiers": [
+    {
+      "name": "1m",
+      "seconds": 60,
+      "keep_s": 86400,
+      "from": null
+    },
+    {
+      "name": "1h",
+      "seconds": 3600,
+      "keep_s": null,
+      "from": "1m"
+    }
+  ],
+  "prune_every_s": 600,
+  "views": [
+    {
+      "max_range_s": 3600,
+      "bucket_s": 60
+    },
+    {
+      "max_range_s": 21600,
+      "bucket_s": 120
+    },
+    {
+      "max_range_s": 86400,
+      "bucket_s": 300
+    },
+    {
+      "max_range_s": 31536000,
+      "bucket_s": 3600
+    }
+  ],
+  "aggregate": {
+    "note": "How samples inside one bucket become one value. max keeps short spikes visible, min keeps dips (PSU voltage), avg for rates and usage.",
+    "default": "avg"
+  },
+  "metrics": [
+    {
+      "topic": "power",
+      "path": "w",
+      "metric": "power_w",
+      "agg": "max"
+    },
+    {
+      "topic": "power",
+      "path": "peak_5s",
+      "metric": "power_peak_w",
+      "agg": "max"
+    },
+    {
+      "topic": "system",
+      "path": "peak_power.peak_w",
+      "metric": "power_true_peak_w",
+      "agg": "max"
+    },
+    {
+      "topic": "system",
+      "path": "cpu_pct",
+      "metric": "cpu_pct"
+    },
+    {
+      "topic": "system",
+      "path": "mem.pct",
+      "metric": "mem_pct"
+    },
+    {
+      "topic": "system",
+      "path": "mem.used",
+      "metric": "mem_used_b"
+    },
+    {
+      "topic": "system",
+      "path": "swap.pct",
+      "metric": "swap_pct"
+    },
+    {
+      "topic": "system",
+      "path": "net_io.*.rx_bps",
+      "reduce": "sum",
+      "metric": "net_rx_bps"
+    },
+    {
+      "topic": "system",
+      "path": "net_io.*.tx_bps",
+      "reduce": "sum",
+      "metric": "net_tx_bps"
+    },
+    {
+      "topic": "system",
+      "path": "disk_io.*.read_bps",
+      "reduce": "sum",
+      "metric": "disk_read_bps"
+    },
+    {
+      "topic": "system",
+      "path": "disk_io.*.write_bps",
+      "reduce": "sum",
+      "metric": "disk_write_bps"
+    },
+    {
+      "topic": "system",
+      "path": "cpu_pkg_w.*",
+      "reduce": "sum",
+      "metric": "cpu_pkg_w",
+      "agg": "max"
+    },
+    {
+      "topic": "system",
+      "path": "dstate.count",
+      "metric": "dstate",
+      "agg": "max"
+    },
+    {
+      "topic": "system",
+      "path": "power.cpu_pkg_w",
+      "metric": "cpu_pkg_w",
+      "agg": "max"
+    },
+    {
+      "topic": "sensors",
+      "path": "temps[].c",
+      "reduce": "max",
+      "metric": "temp_max_c",
+      "agg": "max"
+    },
+    {
+      "topic": "sensors",
+      "path": "fans[].rpm",
+      "reduce": "max",
+      "metric": "fan_max_rpm",
+      "agg": "max"
+    },
+    {
+      "topic": "idrac",
+      "path": "temps[].c",
+      "reduce": "max",
+      "metric": "bmc_temp_max_c",
+      "agg": "max"
+    },
+    {
+      "topic": "idrac",
+      "path": "fans[].rpm",
+      "reduce": "max",
+      "metric": "bmc_fan_max_rpm",
+      "agg": "max"
+    },
+    {
+      "topic": "idrac",
+      "path": "psu.*.v",
+      "reduce": "min",
+      "metric": "psu_volt_min",
+      "agg": "min"
+    },
+    {
+      "topic": "safety",
+      "path": "fan_control.fan_pct",
+      "metric": "fan_control_pct",
+      "agg": "max"
+    },
+    {
+      "topic": "gpu",
+      "path": "cards[].temp",
+      "per_item": "index",
+      "metric": "gpu{index}_temp_c",
+      "agg": "max"
+    },
+    {
+      "topic": "gpu",
+      "path": "cards[].util",
+      "per_item": "index",
+      "metric": "gpu{index}_util_pct"
+    },
+    {
+      "topic": "gpu",
+      "path": "cards[].power_w",
+      "per_item": "index",
+      "metric": "gpu{index}_power_w",
+      "agg": "max"
+    },
+    {
+      "topic": "gpu",
+      "path": "cards[].power_limit_w",
+      "per_item": "index",
+      "metric": "gpu{index}_power_limit_w"
+    },
+    {
+      "topic": "gpu",
+      "path": "cards[].mem_used",
+      "per_item": "index",
+      "metric": "gpu{index}_mem_used_b",
+      "agg": "max"
+    },
+    {
+      "topic": "gpu",
+      "path": "cards[].fan_rpm",
+      "per_item": "index",
+      "metric": "gpu{index}_fan_rpm",
+      "agg": "max"
+    },
+    {
+      "topic": "gpu",
+      "path": "cards[].sm_mhz",
+      "per_item": "index",
+      "metric": "gpu{index}_sm_mhz"
+    },
+    {
+      "topic": "disks",
+      "path": "filesystems[].pct",
+      "per_item": "mount",
+      "metric": "disk_pct:{mount}",
+      "agg": "max",
+      "skip_if": [
+        "remote",
+        "same_as"
+      ]
+    },
+    {
+      "topic": "health",
+      "path": "drives[].temp",
+      "reduce": "max",
+      "metric": "drive_temp_max_c",
+      "agg": "max",
+      "hold_s": 900
+    },
+    {
+      "topic": "idrac",
+      "path": "temps[].c",
+      "exclude": {
+        "name": "^Inlet"
+      },
+      "reduce": "max",
+      "metric": "_hot_bmc",
+      "agg": "max"
+    },
+    {
+      "topic": "sensors",
+      "path": "temps[].c",
+      "match": {
+        "chip": "^coretemp$",
+        "label": "^Package id"
+      },
+      "reduce": "max",
+      "metric": "_hot_cpu",
+      "agg": "max"
+    },
+    {
+      "topic": "sensors",
+      "path": "temps[].c",
+      "match": {
+        "chip": "^nvme$",
+        "label": "^Composite$"
+      },
+      "reduce": "max",
+      "metric": "_hot_nvme",
+      "agg": "max"
+    },
+    {
+      "topic": "sensors",
+      "path": "temps[].c",
+      "match": {
+        "chip": "^lenovo$"
+      },
+      "reduce": "max",
+      "metric": "_hot_lenovo",
+      "agg": "max"
+    },
+    {
+      "topic": "idrac",
+      "path": "psu.*.v",
+      "per_item": "@key",
+      "metric": "psu_volt:{key}",
+      "agg": "min"
+    },
+    {
+      "topic": "system",
+      "path": "power.w",
+      "metric": "_battery_w",
+      "agg": "max"
+    }
+  ],
+  "derived": [
+    {
+      "metric": "hottest_c",
+      "max": [
+        "_hot_bmc",
+        "_hot_cpu",
+        "_hot_nvme",
+        "_hot_lenovo",
+        "drive_temp_max_c"
+      ],
+      "agg": "max",
+      "note": "the hub's host_temp_max: BMC temps except Inlet, CPU package, NVMe composite, SMART drive temps (laptop: its Lenovo sensors)"
+    },
+    {
+      "metric": "power_w",
+      "per_sample": true,
+      "hosts": [
+        "laptop"
+      ],
+      "prefer": "_battery_w",
+      "sum": [
+        "cpu_pkg_w",
+        "gpu0_power_w"
+      ],
+      "fresh_s": 15,
+      "agg": "max",
+      "note": "the laptop has no wall meter: battery draw when discharging, else CPU package + GPU power, per reading, as the hub's laptop_power"
+    }
+  ]
+}

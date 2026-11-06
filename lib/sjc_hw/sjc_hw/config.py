@@ -53,6 +53,12 @@ class Settings:
     gpu_every_s: float = float(env("SJC_GPU_EVERY_S", "2"))
     safety_every_s: float = float(env("SJC_SAFETY_EVERY_S", "5"))
     system_every_s: float = float(env("SJC_SYSTEM_EVERY_S", "5"))
+    disks_every_s: float = float(env("SJC_DISKS_EVERY_S", "60"))
+    health: bool = env("SJC_HEALTH", "") not in ("", "0")  # SMART + kernel errors; needs raw device access (compose.health.yaml)
+    health_every_s: float = float(env("SJC_HEALTH_EVERY_S", "600"))
+    # the host's / mounted read-only (rslave) so filesystem space can be read for every host mount; empty = this container's own
+    host_root: str = env("SJC_HOST_ROOT", "")
+    host_shm: str = env("SJC_HOST_SHM", "/dev/shm")  # where the host's /dev/shm is (imc-bw.json, peak-power.json)
 
     # manual control safety (agent): only while fan-control is NOT running
     controller_stale_s: float = float(env("SJC_CONTROLLER_STALE_S", "30"))  # fan-control state older than this = not running

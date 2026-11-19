@@ -100,3 +100,7 @@ claim it hands back its queue, stops or finishes its running work (the same 300-
 The fill clock (`idle_s` in each claim) restarts whenever the GPU has priority work held or running, a live claim, or — with
 nothing of the worker's own running — GPU utilization at or above `GPU_WORKER_FOREIGN_UTIL` (10 %) from `nvidia-smi`
 (someone else is using it: a llama-server, a training run without a claim file).
+
+A process that isn't Ollama and holds `GPU_WORKER_FOREIGN_VRAM_MB` (1024 MiB) or more of the GPU's memory counts as a claim
+even without a claim file, whether or not it is busy (2026-11-19: an idle ComfyUI held 20.5 GB at 0 % utilization). The
+worker gives the GPU up until that process exits. Writing a claim file is still the clean way: it says who and why.

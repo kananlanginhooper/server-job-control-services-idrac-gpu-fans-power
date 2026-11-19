@@ -50,6 +50,19 @@ def test_claims_live_while_their_pid_runs_and_until_their_end(tmp_path):
     assert gw.live_claims(str(tmp_path / "none"), now) == []
 
 
+def test_a_process_holding_vram_without_a_claim_file_counts_as_a_claim():
+    """2026-11-19: an idle ComfyUI held 20.5 GB at 0 % utilization; Ollama's own runners never count."""
+    csv = (
+        "1583352, .venv/bin/python, 20552\n"
+        "1625186, /usr/local/lib/ollama/llama-server, 18960\n"
+        "2201977, /opt/llama.cpp/llama-server, 8268\n"
+        "777, /usr/bin/Xorg, 12\n"
+        "garbage line\n"
+    )
+    assert [p["pid"] for p in gw.foreign_procs(csv, 1024)] == [1583352, 2201977]
+    assert gw.foreign_procs("", 1024) == []
+
+
 def test_long_fill_work_gives_way_and_short_work_finishes(tmp_path):
     now = time.time()
     ollama = {"yields": True, "finish_s": 300}  # an Ollama call: no estimate

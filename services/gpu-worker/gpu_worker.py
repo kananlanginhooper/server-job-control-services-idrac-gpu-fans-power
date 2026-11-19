@@ -72,6 +72,8 @@ CLAIMS_DIR = os.path.expanduser(env("GPU_WORKER_CLAIMS_DIR", ""))  # claim files
 GPU_INDEX = env("GPU_WORKER_GPU_INDEX", "0")  # nvidia-smi index of this GPU (and CUDA_VISIBLE_DEVICES for jobs)
 NVIDIA_SMI = env("GPU_WORKER_NVIDIA_SMI", "nvidia-smi")  # empty = don't watch for GPU use the worker didn't start
 FOREIGN_UTIL = float(env("GPU_WORKER_FOREIGN_UTIL", "10"))  # % utilization with nothing of ours running = someone else
+# a process that isn't Ollama holding this much VRAM counts as a claim (2026-11-19: an idle ComfyUI held 20.5 GB at 0 %)
+FOREIGN_VRAM_MB = float(env("GPU_WORKER_FOREIGN_VRAM_MB", "1024"))
 JOB_PREFIX = "job:"
 JOB_AGAIN = 75  # a job's exit code for "stopped at a checkpoint, run me again" (EX_TEMPFAIL)
 RANK = {"priority": 0, "standard": 1, "backup": 2}  # the broker's queue order
@@ -232,6 +234,23 @@ def live_claims(folder: str, now: float, alive=pid_alive) -> list[dict]:
     return sorted(out, key=lambda c: float(c.get("at") or 0))
 
 
+def foreign_procs(csv: str, min_mb: float) -> list[dict]:
+    """GPU processes from nvidia-smi --query-compute-apps=pid,process_name,used_memory (csv, noheader, nounits) that
+    aren't Ollama's own runners and hold at least min_mb of VRAM: someone else is using this GPU."""
+    out = []
+    for line in csv.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 3 or "ollama" in parts[1].lower():
+            continue
+        try:
+            pid, mb = int(parts[0]), float(parts[2])
+        except ValueError:
+            continue
+        if mb >= min_mb:
+            out.append({"pid": pid, "name": parts[1], "mb": mb})
+    return out
+
+
 def remaining(beat: dict, now: float) -> float | None:
     """A running job's estimated seconds left: its own status file's remaining_s, else payload est_s minus elapsed."""
     if beat.get("status_file"):
@@ -352,6 +371,20 @@ class Worker:
             return float(out.strip().splitlines()[0])
         except Exception:
             return None
+
+    @staticmethod
+    def gpu_procs() -> list[dict]:
+        """Processes on this GPU that aren't Ollama and hold FOREIGN_VRAM_MB or more ([] without nvidia-smi)."""
+        if not NVIDIA_SMI:
+            return []
+        try:
+            out = subprocess.run(
+                [NVIDIA_SMI, "-i", GPU_INDEX, "--query-compute-apps=pid,process_name,used_memory", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout  # fmt: skip
+            return foreign_procs(out, FOREIGN_VRAM_MB)
+        except Exception:
+            return []
 
     @staticmethod
     def unload(model: str) -> None:
@@ -643,6 +676,15 @@ class Worker:
         while not self.stop.is_set():
             now = time.time()
             claims = live_claims(folder, now) if folder else []
+            with self.qlock:
+                jobs_running = any(b.get("proc") for b in self.running.values())
+            if not claims and not jobs_running:  # a process holding VRAM without a claim file counts as one
+                held = self.gpu_procs()
+                if held:
+                    p = held[0]
+                    claims = [
+                        {"id": f"pid-{p['pid']}", "for": f"{p['name']} holding {p['mb']:.0f} MiB, no claim file", "at": now}
+                    ]
             if claims and not self.hold:
                 self.hold = claims[0]
                 log(f"held by claim {self.hold['id']} ({self.hold.get('for') or '?'}): giving the GPU up")
@@ -771,6 +813,10 @@ if __name__ == "__main__":
     )
     if CLAIMS_DIR:  # a claim already in place holds the GPU from the first moment, before any claim call
         held = live_claims(os.path.join(CLAIMS_DIR, GPU), time.time())
+        if not held:
+            held = [
+                {"id": f"pid-{p['pid']}", "for": f"{p['name']} holding {p['mb']:.0f} MiB, no claim file"} for p in w.gpu_procs()
+            ]
         w.hold = held[0] if held else None
         if w.hold:
             log(f"held by claim {w.hold['id']} ({w.hold.get('for') or '?'}) at start")

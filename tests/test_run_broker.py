@@ -116,7 +116,31 @@ def test_slug():
 def test_reservation_is_active_only_until_its_end():
     until = "2026-11-01T14:45:00-04:00"
     end = 1793558700.0  # that instant
-    assert rb.reservation(end - 60, until, "glyphlang") == {"until": until, "for": "glyphlang", "priority_only": True}
+    assert rb.reservation(end - 60, until, "glyphlang", "exclusive") == {
+        "until": until, "for": "glyphlang", "mode": "exclusive", "priority_only": True, "fill_idle_s": rb.FILL_IDLE_S,
+    }  # fmt: skip
+    assert rb.reservation(end - 60, until, "glyphlang", "fill")["priority_only"] is False
     assert rb.reservation(end, until, "glyphlang") is None
     assert rb.reservation(end - 60, "", "x") is None
     assert rb.reservation(end - 60, "not a date", "x") is None
+
+
+def test_a_fill_reservation_lets_other_work_onto_a_gpu_idle_for_the_fill_time():
+    """Owner 2026-11-18: a reservation holds the priority slot; other work fills a GPU idle for 30 s (docs/gpu-scheduling.md)."""
+    qs = ["priority", "standard", "backup"]
+    fill = {"priority_only": False, "fill_idle_s": 30.0}
+    excl = {"priority_only": True, "fill_idle_s": 30.0}
+    assert rb.claim_queues(qs, None, 0) == qs  # no reservation: every queue, as before
+    assert rb.claim_queues(qs, fill, 5) == ["priority"]  # priority work a moment ago
+    assert rb.claim_queues(qs, fill, 30) == qs
+    assert rb.claim_queues(qs, excl, 9999) == ["priority"]
+    assert rb.yielding(None) == ("backup",)
+    assert rb.yielding(fill) == ("backup", "standard")  # fill work gives way to the holder's priority work
+    assert rb.yielding(excl) == ("backup",)
+
+
+def test_work_with_little_time_left_finishes_instead_of_giving_way():
+    """Owner 2026-11-18: under 300 s of estimated run time left, finish; a changeover may take minutes."""
+    assert rb.finishing({}) is True  # an Ollama call: no estimate, always finishes
+    assert rb.finishing({"remaining_s": rb.YIELD_FINISH_S}) is True
+    assert rb.finishing({"remaining_s": rb.YIELD_FINISH_S + 1}) is False

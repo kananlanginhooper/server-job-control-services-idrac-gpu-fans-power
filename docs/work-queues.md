@@ -6,9 +6,9 @@ Owner's design (2026-10-30): the same broker and runner pattern for all work, pu
 |---|---|---|
 | `work.priority_items` | immediate, human-in-the-loop work (research studies) | always first |
 | `work.standard_items` | normal jobs: what all other work uses | when no priority item fits a GPU |
-| `work.backup_items` | an endless list of low-return work: double-checking, photo fragments | only when nothing else fits; a running backup job gives way as soon as priority or standard work for that GPU is waiting (handed back, not counted as a failed attempt) |
+| `work.backup_items` | an endless list of low-return work: double-checking, photo fragments | only when nothing else fits; a running backup job with more than 300 s left gives way when priority or standard work for that GPU is waiting (handed back, not counted as a failed attempt); closer to done, it finishes first |
 
-Both live in the `taskrunner` database on the hub. An item is **one unit of work for one model**. Today that's one Ollama call, `kind = 'ollama'`. One GPU worker per GPU ([`services/gpu-worker`](../services/gpu-worker/README.md)) claims items through the run broker ([`services/run-broker`](../services/run-broker/README.md)), runs them, and hands back the result. Submitters only write rows; they never talk to a GPU.
+Both live in the `taskrunner` database on the hub. Reservations, jobs (non-Ollama GPU work) and claim files: [GPU scheduling](gpu-scheduling.md). An item is **one unit of work for one model**. Today that's one Ollama call, `kind = 'ollama'`. One GPU worker per GPU ([`services/gpu-worker`](../services/gpu-worker/README.md)) claims items through the run broker ([`services/run-broker`](../services/run-broker/README.md)), runs them, and hands back the result. Submitters only write rows; they never talk to a GPU.
 
 ## Add work
 

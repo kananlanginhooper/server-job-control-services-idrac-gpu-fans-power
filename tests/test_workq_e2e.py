@@ -202,16 +202,15 @@ def test_work_queues(tmp_path):
         db.execute("select work.cancel('standard', study => 'probe')")
         assert db.execute("select count(*) n from work.depth").fetchone()["n"] == 0
 
-        # backup: taken only when nothing else waits, and a running backup item gives way to new standard work
+        # backup: taken only when nothing else waits. A running Ollama call finishes before new standard work runs
+        # (owner, 2026-11-18: under 300 s left, finish; only long jobs give way, docs/gpu-scheduling.md)
         bk = add("backup", "slow", study="fragments")
         wait(lambda: item("backup", bk)["state"] == "claimed")
         wait(lambda: (item("backup", bk)["progress"] or "").endswith("tokens"), secs=30)
         std = add("standard", "std-after-backup")
-        wait(lambda: item("standard", std)["state"] == "done", secs=40)
+        wait(lambda: item("standard", std)["state"] == "done", secs=60)
         b = item("backup", bk)
-        assert b["state"] in ("ready", "claimed") and b["attempt"] <= 1  # handed back uncounted, then taken again
-        db.execute("select work.cancel('backup', study => 'fragments')")
-        wait(lambda: item("backup", bk)["state"] == "cancelled")
+        assert b["state"] == "done" and b["attempt"] == 1 and b["finished_at"] <= item("standard", std)["finished_at"]
 
         # a GPU that serves only the backup queue never gets standard work
         worker.send_signal(signal.SIGSTOP)  # keep the real worker out of it for a moment

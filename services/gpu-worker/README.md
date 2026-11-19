@@ -2,7 +2,7 @@
 
 **Runs on:** each GPU's server, one per GPU, as a continuous task-runner row (not a unit of its own)
 
-Takes single work items from the hub's run broker ([work queues](../../docs/work-queues.md)): the priority queue first, then standard, then backup (a running backup job gives way as soon as better work is waiting). It runs each as one Ollama call on this GPU and hands the result back. It never touches a database; claim, beat, done, failed and release are the broker's HTTP routes.
+Takes single work items from the hub's run broker ([work queues](../../docs/work-queues.md)): the priority queue first, then standard, then backup. It runs each as one Ollama call on this GPU (or, for model `job:<name>`, the job defined on this server) and hands the result back. Lower-priority work with more than 300 s left gives way to better work; anything closer to done finishes first. Claim files, jobs and the fill rules during a reservation: [GPU scheduling](../../docs/gpu-scheduling.md). It never touches a database; claim, beat, done, failed and release are the broker's HTTP routes.
 
 - **Claims** by long-poll. Each claim sends this GPU's models (own model first, then fallbacks) and what Ollama has loaded now (model + context, from `/api/ps`), so the broker can keep the loaded model busy.
 - **Streams the call.** It beats every 10 s with the token count; the broker answers `cancel` for a paused or cancelled item, and the worker drops the call.
@@ -13,7 +13,7 @@ Takes single work items from the hub's run broker ([work queues](../../docs/work
 | | |
 |---|---|
 | Reads | the broker (`GPU_WORKER_BROKER_URL`), Ollama on this host (`GPU_WORKER_OLLAMA`), the power target (Low Power) |
-| Writes | nothing locally except its log (the runner's) |
+| Writes | its log (the runner's); with claims on, `GPU_WORKER_CLAIMS_DIR/<gpu>/.state`; with jobs, `GPU_WORKER_JOBS_DIR/logs/` |
 | Settings | `GPU_WORKER_MODELS` (required, own first), `GPU_WORKER_GPU`, `GPU_WORKER_HOST`, `GPU_WORKER_SLOTS`, `GPU_WORKER_KEEP_ALIVE`, `GPU_WORKER_BROKER_URL` (or `TASKRUNNER_BROKER_URL`), `<HOST>_AGENT_TOKEN` |
 
 Run it as a runner row on the GPU's server:

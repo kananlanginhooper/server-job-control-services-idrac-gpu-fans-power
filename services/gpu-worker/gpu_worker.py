@@ -17,6 +17,14 @@
 #             load_duration) so the broker learns this GPU's model switch cost
 #   Low Power (power target scale=down): no new claims; a running item finishes. Ollama unreachable (GPU switched off):
 #             the item is released, not counted as a failure, and the worker waits.
+#   (2026-11-18, docs/gpu-scheduling.md)
+#   jobs      an item for model job:<name> runs the job defined in GPU_WORKER_JOBS_DIR/<name>.json (a command, not an
+#             Ollama call); exit 0 = done, 75 = checkpointed, run again later; Ollama is unloaded first
+#   claims    a live file in GPU_WORKER_CLAIMS_DIR/<gpu>/ (scripts/gpuq.py hold) gives the GPU to its holder: the worker hands
+#             back its queue, finishes or stops what runs, unloads Ollama and claims nothing until the file is gone
+#   idle_s    sent with each claim: seconds since this GPU last had priority work, a live claim or GPU use it didn't start;
+#             during a reservation the broker hands out standard and backup work only after RUN_BROKER_FILL_IDLE_S of it
+#   give way  running work marked `yields` gives way to better work only with more than its `finish_s` (300 s) left
 from __future__ import annotations
 
 import gzip
@@ -25,11 +33,13 @@ import json
 import os
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from urllib.parse import urlsplit
 
 _here = os.path.dirname(os.path.realpath(__file__))
@@ -57,8 +67,15 @@ QUEUE_S = float(env("GPU_WORKER_QUEUE_S", "60"))  # seconds of claimed work held
 SYNC_S = float(env("GPU_WORKER_SYNC_S", "2"))  # how often results go back (leases renew every BEAT_S)
 MAX_BATCH = 20
 SYNC_MAX = 15  # results per sync
+JOBS_DIR = os.path.expanduser(env("GPU_WORKER_JOBS_DIR", ""))  # job definitions <name>.json; empty = no jobs on this GPU
+CLAIMS_DIR = os.path.expanduser(env("GPU_WORKER_CLAIMS_DIR", ""))  # claim files, one folder per GPU; empty = off
+GPU_INDEX = env("GPU_WORKER_GPU_INDEX", "0")  # nvidia-smi index of this GPU (and CUDA_VISIBLE_DEVICES for jobs)
+NVIDIA_SMI = env("GPU_WORKER_NVIDIA_SMI", "nvidia-smi")  # empty = don't watch for GPU use the worker didn't start
+FOREIGN_UTIL = float(env("GPU_WORKER_FOREIGN_UTIL", "10"))  # % utilization with nothing of ours running = someone else
+JOB_PREFIX = "job:"
+JOB_AGAIN = 75  # a job's exit code for "stopped at a checkpoint, run me again" (EX_TEMPFAIL)
 RANK = {"priority": 0, "standard": 1, "backup": 2}  # the broker's queue order
-YIELDING = ("backup",)  # a running item from these gives way to better work
+YIELDING = ("backup",)  # a running item from these gives way to better work (the broker marks others with `yields`)
 
 
 def queue_order(it: dict) -> tuple:
@@ -106,18 +123,22 @@ def spill(ps: list[dict], model: str) -> tuple[float, float] | None:
 
 
 def assemble(api: str, chunks: list[dict]) -> dict:
-    """Streamed chunks -> the same shape Ollama returns without streaming (minus the token `context` array)."""
-    text, thinking = [], []
+    """Streamed chunks -> the same shape Ollama returns without streaming (minus the token `context` array).
+    With "logprobs" in the body, each content chunk carries its tokens' logprobs: all of them are kept (2026-11-18)."""
+    text, thinking, logprobs = [], [], []
     for c in chunks:
         src = (c.get("message") or {}) if api == "chat" else c
         text.append(src.get("content" if api == "chat" else "response") or "")
         thinking.append(src.get("thinking") or "")
+        logprobs += c.get("logprobs") or []
     last = dict(chunks[-1]) if chunks else {}
     last.pop("context", None)
     if api == "chat":
         last["message"] = {"role": "assistant", "content": "".join(text), "thinking": "".join(thinking)}
     else:
         last["response"], last["thinking"] = "".join(text), "".join(thinking)
+    if logprobs:
+        last["logprobs"] = logprobs
     return last
 
 
@@ -133,6 +154,116 @@ def stats(result: dict, ctx: int | None) -> dict:
         "output_tokens": result.get("eval_count"),
         "done_reason": result.get("done_reason"),
     }
+
+
+def job_defs(folder: str) -> dict[str, dict]:
+    """{name: definition} from <folder>/<name>.json; a file without a command list is skipped."""
+    out = {}
+    if not folder or not os.path.isdir(folder):
+        return out
+    for f in sorted(os.listdir(folder)):
+        if not f.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(folder, f), encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict) and isinstance(d.get("cmd"), list) and d["cmd"] and all(isinstance(a, str) for a in d["cmd"]):
+            out[f[:-5]] = d
+    return out
+
+
+def job_argv(defn: dict, item: dict) -> list[str]:
+    """The command for a job item: the definition's fixed argv, plus the item's payload.args only if the definition allows."""
+    args = (item.get("payload") or {}).get("args") or []
+    if not isinstance(args, list) or not all(isinstance(a, (str, int, float)) for a in args):
+        raise ValueError("payload.args must be a list of strings")
+    if args and not defn.get("args"):
+        raise ValueError("this job takes no args")
+    return list(defn["cmd"]) + [str(a) for a in args]
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # someone else's process (sudo docker): alive
+    except OSError:
+        return False
+    return True
+
+
+def when(v: object) -> float | None:
+    """A claim's `until`: epoch seconds or ISO 8601; None when missing or unreadable."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return datetime.fromisoformat(str(v)).timestamp()
+    except ValueError:
+        return None
+
+
+def live_claims(folder: str, now: float, alive=pid_alive) -> list[dict]:
+    """The live claim files in a GPU's folder, oldest first: alive while their pid runs (if any) and until has not passed (if any)."""
+    out = []
+    if not folder or not os.path.isdir(folder):
+        return out
+    for f in os.listdir(folder):
+        if not f.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(folder, f), encoding="utf-8") as fh:
+                c = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(c, dict):
+            continue
+        pid, until = c.get("pid"), when(c.get("until"))
+        if pid and not alive(int(pid)):
+            continue
+        if until is not None and until <= now:
+            continue
+        out.append(dict(c, id=c.get("id") or f[:-5]))
+    return sorted(out, key=lambda c: float(c.get("at") or 0))
+
+
+def remaining(beat: dict, now: float) -> float | None:
+    """A running job's estimated seconds left: its own status file's remaining_s, else payload est_s minus elapsed."""
+    if beat.get("status_file"):
+        try:
+            with open(beat["status_file"], encoding="utf-8") as fh:
+                st = json.load(fh)
+            if st.get("remaining_s") is not None:
+                return float(st["remaining_s"])
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+    if beat.get("est_s") and beat.get("started"):
+        return max(0.0, float(beat["est_s"]) - (now - beat["started"]))
+    return None
+
+
+def gives_way(beat: dict, now: float) -> bool:
+    """Should running work marked `yields` give way now? Only with more than its finish_s of estimated time left
+    (owner, 2026-11-18: under 300 s left, finish; don't thrash). An Ollama call has no estimate: it finishes."""
+    if not beat.get("yields"):
+        return False
+    left = remaining(beat, now)
+    return left is not None and left > float(beat.get("finish_s") or 300)
+
+
+def tail(path: str, n: int) -> str:
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 16384))
+            return "\n".join(f.read().decode(errors="replace").splitlines()[-n:])
+    except OSError:
+        return ""
 
 
 # ---------- the worker ----------
@@ -153,6 +284,8 @@ class Worker:
         self.running: dict[str, dict] = {}  # ref -> its beat dict (progress, cancel, resp)
         self.outbox: list[dict] = []  # finished results waiting for the broker's acknowledgement
         self.ready, self.synced = threading.Event(), threading.Event()
+        self.hold: dict | None = None  # the live claim file holding this GPU, if any
+        self.busy_at = time.time()  # last priority work, live claim or GPU use we didn't start: the fill clock's zero
 
     def call_broker(self, path: str, body: dict, timeout: float = 15) -> tuple[int, dict | None]:
         """POST to the broker over this thread's kept-alive connection (2026-11-02: a new TCP connection per call cost
@@ -199,6 +332,26 @@ class Worker:
         except Exception:
             return None
         return {"model": ps[0]["name"], "ctx": ps[0].get("context_length") or 0} if ps else None
+
+    @staticmethod
+    def loaded_all() -> list[str]:
+        try:
+            return [m["name"] for m in json.load(urllib.request.urlopen(OLLAMA + "/api/ps", timeout=5)).get("models") or []]
+        except Exception:
+            return []
+
+    @staticmethod
+    def gpu_util() -> float | None:
+        if not NVIDIA_SMI:
+            return None
+        try:
+            out = subprocess.run(
+                [NVIDIA_SMI, "-i", GPU_INDEX, "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout  # fmt: skip
+            return float(out.strip().splitlines()[0])
+        except Exception:
+            return None
 
     @staticmethod
     def unload(model: str) -> None:
@@ -268,8 +421,9 @@ class Worker:
                 # the broker sizes the batch: ~QUEUE_S seconds held, at each model's measured item time on this GPU,
                 # and past that only work that outranks everything held (so asking while holding costs nothing)
                 need = MAX_BATCH - held
-                models = [m for m in MODELS if self.avoid.get(m, 0) <= time.time()]
-                if self.low_power() or need <= 0 or not models:
+                jobs = [JOB_PREFIX + n for n in job_defs(JOBS_DIR)]
+                models = [m for m in MODELS + jobs if self.avoid.get(m, 0) <= time.time()]
+                if self.hold or self.low_power() or need <= 0 or not models:
                     self.stop.wait(1)
                     continue
                 body = {
@@ -279,21 +433,23 @@ class Worker:
                     "n": need,
                     "queue_s": QUEUE_S,
                     "wait": 0 if held else WAIT_S,
+                    "idle_s": round(time.time() - self.busy_at, 1),
                 }
                 code, r = self.call_broker("claim", body, timeout=WAIT_S + 15)
-                if code == 200 and r:
+                if code == 200 and r and self.hold:  # a claim file arrived while this long-poll was out: hand them straight back
+                    with self.qlock:
+                        self.outbox += [{"queue": it["queue"], "id": it["id"], "release": True} for it in r.get("items") or []]
+                    self.synced.set()
+                    log(f"handed back {len(r.get('items') or [])} item(s) claimed as claim {self.hold['id']} arrived")
+                elif code == 200 and r:
                     with self.qlock:
                         for it in r.get("items") or []:
                             self.queue.append(it)
                         self.queue.sort(key=queue_order)
                         better = min((RANK.get(it["queue"], 9) for it in self.queue), default=9)
                         for ref, b in self.running.items():
-                            if RANK.get(ref.split("/")[0], 9) > better and ref.split("/")[0] in YIELDING:
-                                b["cancel"], b["yield"] = True, True  # a backup item gives way to better work it now holds
-                                try:
-                                    b["resp"].close()
-                                except Exception:
-                                    pass
+                            if RANK.get(ref.split("/")[0], 9) > better and not b.get("cancel") and gives_way(b, time.time()):
+                                self.cancel(b, yielded=True)  # long fill work gives way to better work it now holds
                                 log(f"{ref}: gives way to better work held locally")
                     self.ready.set()
                     log(
@@ -313,9 +469,18 @@ class Worker:
         while not self.stop.is_set():
             with self.qlock:
                 item = self.queue.pop(0) if self.queue else None
+                if item and self.hold:  # never start anything under a claim (2026-11-18: an item claimed 8 s after one started)
+                    self.outbox.append({"queue": item["queue"], "id": item["id"], "release": True})
+                    item = None
+                    self.synced.set()
                 if item:
                     ref = f"{item['queue']}/{item['id']}"
-                    beat = {"progress": None}
+                    beat = {
+                        "progress": None,
+                        "yields": bool(item.get("yields")) or item["queue"] in YIELDING,
+                        "finish_s": item.get("finish_s") or 300,
+                        "est_s": (item.get("payload") or {}).get("est_s"),
+                    }
                     self.running[ref] = beat
             if not item:
                 self.ready.clear()
@@ -324,6 +489,20 @@ class Worker:
             self.run_one(item, ref, beat)
 
     def run_one(self, item: dict, ref: str, beat: dict) -> None:
+        if item["model"].startswith(JOB_PREFIX):
+            out = None
+            try:
+                out = self.run_job(item, ref, beat)
+            except Exception as e:
+                out = {"error": f"{type(e).__name__}: {e}", "retry": False}
+                log(f"{ref}: job failed to start: {type(e).__name__}: {e}")
+            finally:
+                with self.qlock:
+                    self.running.pop(ref, None)
+                    if out is not None:
+                        self.outbox.append(dict(out, queue=item["queue"], id=item["id"]))
+                self.synced.set()
+            return
         ctx = ((item.get("payload") or {}).get("body") or {}).get("options", {}).get("num_ctx")
         t0 = time.time()
         out = None
@@ -373,6 +552,145 @@ class Worker:
                     self.outbox.append(dict(out, queue=item["queue"], id=item["id"]))
             self.synced.set()
 
+    def run_job(self, item: dict, ref: str, beat: dict) -> dict | None:
+        """Run a job item to its end: the definition's command in its own process group, Ollama unloaded first.
+        Cancelled or giving way: SIGTERM, then SIGKILL after grace_s."""
+        name = item["model"][len(JOB_PREFIX) :]
+        defn = job_defs(JOBS_DIR).get(name)
+        if not defn:
+            return {"error": f"no job definition {name!r} on {HOST}", "retry": False}
+        argv = job_argv(defn, item)
+        for m in self.loaded_all():  # the job gets the whole GPU
+            self.unload(m)
+        logs = os.path.join(JOBS_DIR, "logs")
+        os.makedirs(logs, exist_ok=True)
+        logpath = os.path.join(logs, f"{item['queue']}-{item['id']}.log")
+        beat["status_file"] = os.path.join(logs, f"{item['queue']}-{item['id']}.status.json")
+        envs = dict(
+            os.environ, CUDA_VISIBLE_DEVICES=GPU_INDEX, GPU_JOB_ID=ref, GPU_JOB_GPU=GPU, GPU_JOB_STATUS=beat["status_file"]
+        )
+        envs.update({k: str(v) for k, v in (defn.get("env") or {}).items()})
+        grace = float(defn.get("grace_s") or 120)
+        t0 = beat["started"] = time.time()
+        with open(logpath, "ab") as lf:
+            p = subprocess.Popen(
+                argv,
+                cwd=os.path.expanduser(defn.get("workdir") or JOBS_DIR),
+                stdout=lf, stderr=subprocess.STDOUT, env=envs, start_new_session=True,
+            )  # fmt: skip
+        beat["proc"] = p
+        log(f"{ref}: job {name} started (pid {p.pid}, log {logpath})")
+        stop_at, seen = None, 0.0
+        while p.poll() is None:
+            now = time.time()
+            if beat.get("cancel") and stop_at is None:
+                stop_at = now
+                self.signal_job(p, signal.SIGTERM)
+                log(f"{ref}: job {name} stopping (SIGTERM; SIGKILL after {grace:.0f} s)")
+            if stop_at is not None and now - stop_at > grace:
+                self.signal_job(p, signal.SIGKILL)
+            if now - seen >= 5:
+                seen = now
+                note = ""
+                try:
+                    with open(beat["status_file"], encoding="utf-8") as fh:
+                        note = json.load(fh).get("note") or ""
+                except (OSError, ValueError, AttributeError):
+                    pass
+                beat["progress"] = (note or tail(logpath, 1))[:200] or None
+            time.sleep(1)
+        rc, dt = p.returncode, time.time() - t0
+        log(f"{ref}: job {name} exited {rc} after {dt:.0f} s")
+        if beat.get("cancel"):
+            return {"release": True} if beat.get("yield") else None
+        if rc == 0:
+            return {
+                "result": {"exit": 0, "log_tail": tail(logpath, 40)},
+                "stats": {"gpu": GPU, "ctx": None, "total_s": dt, "load_s": 0},
+            }
+        if rc == JOB_AGAIN:
+            return {"release": True}
+        return {"error": f"exit {rc}: {tail(logpath, 5)}"[:2000], "retry": True}
+
+    @staticmethod
+    def signal_job(p: subprocess.Popen, sig: int) -> None:
+        try:
+            os.killpg(p.pid, sig)
+        except (ProcessLookupError, PermissionError, AttributeError, OSError):
+            try:
+                p.send_signal(sig)
+            except Exception:
+                pass
+
+    @staticmethod
+    def cancel(b: dict, yielded: bool = False) -> None:
+        """Stop running work: an Ollama call's stream is closed; a job's loop sees `cancel` and signals its process."""
+        b["cancel"] = True
+        if yielded:
+            b["yield"] = True
+        try:
+            b["resp"].close()
+        except Exception:
+            pass
+
+    # ---------- claim files and the fill clock (2026-11-18, docs/gpu-scheduling.md) ----------
+    def watch_loop(self) -> None:
+        """Every 2 s: follow the claim files, restart the fill clock while the GPU has priority work or use we didn't
+        start, and write <gpu>/.state for scripts/gpuq.py."""
+        folder = os.path.join(CLAIMS_DIR, GPU) if CLAIMS_DIR else ""
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+        while not self.stop.is_set():
+            now = time.time()
+            claims = live_claims(folder, now) if folder else []
+            if claims and not self.hold:
+                self.hold = claims[0]
+                log(f"held by claim {self.hold['id']} ({self.hold.get('for') or '?'}): giving the GPU up")
+                self.give_up()
+            elif not claims and self.hold:
+                log(f"claim {self.hold['id']} is gone: taking work again")
+                self.hold = None
+            elif claims:
+                self.hold = claims[0]
+            with self.qlock:
+                mine = bool(self.queue or self.running)
+                prio = any(it["queue"] == "priority" for it in self.queue) or any(r.startswith("priority/") for r in self.running)
+                if self.hold:  # under a claim only work close to done keeps running (a job's estimate can drop over time)
+                    for ref, b in self.running.items():
+                        if not b.get("cancel") and gives_way(dict(b, yields=True), now):
+                            self.cancel(b, yielded=True)
+                            log(f"{ref}: stops for claim {self.hold['id']}")
+            util = None if mine else self.gpu_util()
+            if self.hold or prio or (util is not None and util >= FOREIGN_UTIL):
+                self.busy_at = now
+            loaded = self.loaded_all() if self.hold and not mine else []
+            for m in loaded:  # under a claim, with nothing of ours running, nothing of ours stays in VRAM
+                self.unload(m)
+                log(f"unloaded {m} for claim {self.hold['id']}")
+            if folder:
+                free = bool(self.hold) and not mine and not loaded and not self.loaded_all()
+                state = {"gpu": GPU, "held_by": self.hold["id"] if self.hold else None, "free": free, "at": now}
+                try:
+                    tmp = os.path.join(folder, ".state.tmp")
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(state, f)
+                    os.replace(tmp, os.path.join(folder, ".state"))
+                except OSError:
+                    pass
+            self.stop.wait(2)
+
+    def give_up(self) -> None:
+        """A claim arrived: hand back everything not started and stop running work with long left (the rest finishes).
+        watch_loop unloads Ollama once nothing of ours runs."""
+        now = time.time()
+        with self.qlock:
+            back, self.queue = self.queue, []
+            self.outbox += [{"queue": it["queue"], "id": it["id"], "release": True} for it in back]
+            for b in self.running.values():
+                if gives_way(dict(b, yields=True), now):
+                    self.cancel(b, yielded=True)
+        self.synced.set()
+
     def sync_loop(self) -> None:
         last_held, delay = 0.0, SYNC_S
         while not self.stop.is_set():
@@ -383,7 +701,12 @@ class Worker:
                 results = self.outbox[:SYNC_MAX]  # small batches: a big upload stalls on a lossy link
                 held = [{"queue": it["queue"], "id": it["id"], "progress": None} for it in self.queue]
                 held += [
-                    {"queue": r.split("/")[0], "id": int(r.split("/")[1]), "progress": b.get("progress")}
+                    {
+                        "queue": r.split("/")[0],
+                        "id": int(r.split("/")[1]),
+                        "progress": b.get("progress"),
+                        "remaining_s": remaining(b, now),
+                    }
                     for r, b in self.running.items()
                 ]
             send_held = now - last_held >= BEAT_S
@@ -400,12 +723,7 @@ class Worker:
                     if drop:
                         self.queue = [it for it in self.queue if f"{it['queue']}/{it['id']}" not in drop]
                         for ref in drop & set(self.running):
-                            b = self.running[ref]
-                            b["cancel"] = True
-                            try:
-                                b["resp"].close()
-                            except Exception:
-                                pass
+                            self.cancel(self.running[ref])
                         log(f"broker dropped {len(drop)} item(s): {sorted(drop)[:5]}")
                     if relevel(self.queue, r.get("levels") or {}):
                         self.queue.sort(key=queue_order)
@@ -448,9 +766,16 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, stop)
     log(
         f"GPU worker {GPU} on {HOST}: models {MODELS}, queues {QUEUES or 'all'}, {'GPU only, ' if GPU_ONLY else ''}"
-        f"Ollama {OLLAMA}, {SLOTS} slot(s), local queue ~{QUEUE_S:.0f} s of work, sync every {SYNC_S:.0f} s, broker {BROKER}"
+        f"Ollama {OLLAMA}, {SLOTS} slot(s), local queue ~{QUEUE_S:.0f} s of work, sync every {SYNC_S:.0f} s, broker {BROKER}, "
+        f"jobs {sorted(job_defs(JOBS_DIR)) or 'none'}, claims {os.path.join(CLAIMS_DIR, GPU) if CLAIMS_DIR else 'off'}"
     )
+    if CLAIMS_DIR:  # a claim already in place holds the GPU from the first moment, before any claim call
+        held = live_claims(os.path.join(CLAIMS_DIR, GPU), time.time())
+        w.hold = held[0] if held else None
+        if w.hold:
+            log(f"held by claim {w.hold['id']} ({w.hold.get('for') or '?'}) at start")
     threads = [threading.Thread(target=w.fetch_loop, daemon=True), threading.Thread(target=w.sync_loop, daemon=True)]
+    threads += [threading.Thread(target=w.watch_loop, daemon=True)]
     threads += [threading.Thread(target=w.run_loop, args=(i,), daemon=True) for i in range(SLOTS)]
     for t in threads:
         t.start()

@@ -100,7 +100,17 @@ def test_assemble_matches_ollamas_non_streamed_answer():
     assert r["message"] == {"role": "assistant", "content": "Hello", "thinking": "hm"} and r["eval_count"] == 3
     assert gw.stats(r, 8192)["load_s"] == 4.5
     g = gw.assemble("generate", [{"response": "a"}, {"response": "b", "done": True, "context": [1, 2]}])
-    assert g["response"] == "ab" and "context" not in g
+    assert g["response"] == "ab" and "context" not in g and "logprobs" not in g
+    # with "logprobs" asked for, every content chunk carries its tokens' logprobs and the done chunk none: all are kept
+    lp = gw.assemble(
+        "generate",
+        [
+            {"response": "Ye", "logprobs": [{"token": "Ye", "logprob": -0.1}]},
+            {"response": "s", "logprobs": [{"token": "s", "logprob": -0.2}]},
+            {"response": "", "done": True},
+        ],
+    )
+    assert [x["token"] for x in lp["logprobs"]] == ["Ye", "s"]
 
 
 def test_dashboard_tab_order_outranks_item_priority():

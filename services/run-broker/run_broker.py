@@ -59,11 +59,20 @@ AUTO_ACCEPT = env("RUN_BROKER_AUTO_ACCEPT", "") not in ("", "0")
 PLACE_REQUESTS = env("RUN_BROKER_PLACE_REQUESTS", "") not in ("", "0")  # place task_requests (off: work queues only)
 # the wrapper's tab list: dashboard order ranks standard and backup work (read every minute; last good answer kept)
 TABS_URL = env("RUN_BROKER_TABS_URL", "http://127.0.0.1:8097/api/tabs")
-# A reservation: until RUN_BROKER_RESERVE_UNTIL (ISO 8601 with offset), every GPU takes only priority-queue work (the
-# priority queue's owner gets the GPUs to itself); standard and backup wait. RUN_BROKER_RESERVE_FOR says who and why.
+# A reservation: until RUN_BROKER_RESERVE_UNTIL (ISO 8601 with offset), the priority queue's owner holds the priority slot
+# (owner, 2026-11-18: a reservation is for that work to take the priority slot, not for all work to be priority).
+# RUN_BROKER_RESERVE_FOR says who and why. Mode "fill" (docs/gpu-scheduling.md): standard and backup work fills a GPU once it
+# has gone RUN_BROKER_FILL_IDLE_S with no priority work, and standard work gives way to priority work like backup does.
+# Mode "exclusive": priority-queue work only.
 RESERVE_UNTIL = env("RUN_BROKER_RESERVE_UNTIL", "")
 RESERVE_FOR = env("RUN_BROKER_RESERVE_FOR", "")
+RESERVE_MODE = env("RUN_BROKER_RESERVE_MODE", "fill")
+FILL_IDLE_S = float(env("RUN_BROKER_FILL_IDLE_S", "30"))
+# work giving way with less than this many seconds of estimated run time left finishes first (owner, 2026-11-18: a
+# changeover may take minutes; don't thrash)
+YIELD_FINISH_S = float(env("RUN_BROKER_YIELD_FINISH_S", "300"))
 ITEM_S_DEFAULT = 20.0  # assumed seconds per item for a GPU, model and context with no finished item yet
+JOB_S_DEFAULT = 3600.0  # the same for a job (model job:<name>): one job is a whole batch until one has finished
 LEASE_S = int(env("RUN_BROKER_LEASE_S", "120"))  # a claimed item is handed out again if its worker stops beating for this long
 MAX_FAILS = int(env("RUN_BROKER_MAX_FAILS", "3"))
 CODE_ROOT = env("RUN_BROKER_CODE_ROOT", "~/server-projects")  # where every host keeps its repo clones
@@ -473,8 +482,8 @@ class Broker:
         """One item for this GPU, or None. body: {gpu, models: [own first, then fallbacks], loaded: {model, ctx} | null}."""
         gpu, models = body["gpu"], [m for m in body.get("models") or [] if m]
         queues = [q for q in workq.QUEUES if q in (body.get("queues") or workq.QUEUES)]  # this worker's queues, in claim order
-        if reservation():
-            queues = [q for q in queues if q == "priority"]
+        res = reservation()
+        queues = claim_queues(queues, res, float(body.get("idle_s") or 0))
         ld = body.get("loaded") or {}
         loaded = (ld["model"], int(ld.get("ctx") or 0)) if ld.get("model") else None
         ctx_sql = "(payload #>> '{body,options,num_ctx}')::int"
@@ -523,7 +532,7 @@ class Broker:
                     "on conflict (queue, study) do update set last_at = now()",
                     (q, got[0]["study"]),
                 )
-                return dict(got[0], queue=q, lease_s=LEASE_S)
+                return dict(got[0], queue=q, lease_s=LEASE_S, yields=q in yielding(res), finish_s=YIELD_FINISH_S)
         return None
 
     def wait_claim(self, host: str, body: dict, wait: float) -> dict | None:
@@ -561,7 +570,8 @@ class Broker:
         return int(((it.get("payload") or {}).get("body") or {}).get("options", {}).get("num_ctx") or 0)
 
     def est_s(self, gpu: str, model: str, ctx: int | None) -> float:
-        return self.item_s.get((gpu, model, int(ctx or 0)), ITEM_S_DEFAULT)
+        default = JOB_S_DEFAULT if model.startswith("job:") else ITEM_S_DEFAULT
+        return self.item_s.get((gpu, model, int(ctx or 0)), default)
 
     def held_rows(self, gpu: str) -> list[dict]:
         ctx_sql = "(payload #>> '{body,options,num_ctx}')::int"
@@ -608,7 +618,7 @@ class Broker:
                     f"update work.{q}_items set lease_until = now() + make_interval(secs => %s), progress = %s {held} returning id, priority",
                     (LEASE_S, body.get("progress"), item_id, gpu),
                 )
-                if r and q in workq.YIELDING and self.better_waiting(q, gpu):
+                if r and q in yielding(reservation()) and not finishing(body) and self.better_waiting(q, gpu):
                     self.conn().execute(
                         f"update work.{q}_items set state = 'ready', claimed_by = null, lease_until = null, "
                         f"attempt = greatest(attempt - 1, 0), progress = null {held}",
@@ -693,8 +703,10 @@ class Broker:
         )
 
 
-def reservation(now: float | None = None, until: str | None = None, who: str | None = None) -> dict | None:
-    """The active reservation, or None: {until, for, priority_only: true}."""
+def reservation(
+    now: float | None = None, until: str | None = None, who: str | None = None, mode: str | None = None
+) -> dict | None:
+    """The active reservation, or None: {until, for, mode, priority_only, fill_idle_s}."""
     until = RESERVE_UNTIL if until is None else until
     if not until:
         return None
@@ -704,7 +716,34 @@ def reservation(now: float | None = None, until: str | None = None, who: str | N
         return None
     if (time.time() if now is None else now) >= end:
         return None
-    return {"until": until, "for": RESERVE_FOR if who is None else who, "priority_only": True}
+    mode = RESERVE_MODE if mode is None else mode
+    return {
+        "until": until,
+        "for": RESERVE_FOR if who is None else who,
+        "mode": mode,
+        "priority_only": mode == "exclusive",
+        "fill_idle_s": FILL_IDLE_S,
+    }
+
+
+def claim_queues(queues: list[str], res: dict | None, idle_s: float) -> list[str]:
+    """The queues a GPU may claim from now. Under a reservation, standard and backup only once the GPU has gone the fill
+    time with no priority work (the worker sends idle_s; an older worker sends none, so it gets priority work only)."""
+    if res and (res["priority_only"] or idle_s < res["fill_idle_s"]):
+        return [q for q in queues if q == "priority"]
+    return queues
+
+
+def yielding(res: dict | None) -> tuple:
+    """Queues whose running work gives way to ready work in an earlier queue: backup always; standard during a fill reservation."""
+    return workq.YIELDING + (("standard",) if res and not res["priority_only"] else ())
+
+
+def finishing(held: dict) -> bool:
+    """Held work with under YIELD_FINISH_S of estimated run time left finishes instead of giving way. An Ollama call reports
+    no estimate: it always counts as finishing."""
+    left = held.get("remaining_s")
+    return left is None or float(left) <= YIELD_FINISH_S
 
 
 def serve(b: Broker, port: int = PORT, tokens: dict | None = None) -> ThreadingHTTPServer:
@@ -818,7 +857,7 @@ def status(b: Broker) -> dict:
         "auto_accept": b.auto_accept,
         "place_requests": b.place_requests,
         "dashboard_order": b.tab_order(),  # ranks standard and backup work
-        "reservation": reservation(),  # while set, GPUs take priority-queue work only
+        "reservation": reservation(),  # while set, priority work first; others fill idle GPUs (mode fill)
         "work": b.rows("select * from work.depth order by queue, model, priority desc, state"),
         "gpus": b.rows("select gpu, host, model, ctx, model_since, last_seen from work.gpus order by gpu"),
         "model_loads": b.rows("select * from work.model_loads order by gpu, model"),
